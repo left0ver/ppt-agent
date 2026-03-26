@@ -1,22 +1,28 @@
+import json
 import os
+from enum import Enum
 from pathlib import Path
-from typing import Annotated, Literal, Optional, Any
-
+from typing import Annotated, Any, Literal, Optional
+from utils import extract_via_travily
+import json_repair
 from dotenv import load_dotenv
 from langchain.messages import AnyMessage
-from langchain_openai import ChatOpenAI
-from langgraph.graph import END, START, MessagesState, StateGraph
-from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
+from langchain_core.messages import HumanMessage
+from langchain_core.output_parsers import JsonOutputParser
 
 # from gohumanloop.adapters.langgraph_adapter import interrupt, create_resume_command
 from langchain_core.runnables import RunnableConfig
-
-from langgraph.graph.state import Command
-from langgraph.types import Command, interrupt
+from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
-from enum import Enum
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.graph.state import Command
 from langgraph.runtime import Runtime
+from langgraph.types import Command, RetryPolicy, interrupt
+from prompt import grok_search_prompt_template
+from pydantic import BaseModel, Field
+from tavily import TavilyClient
 
 load_dotenv()
 
@@ -49,10 +55,17 @@ class PPTInfo(BaseModel):
     )
 
 
+# class Grok_Search_Result(BaseModel):
+
+#     title: str = Field(description="结果的标题")
+#     description: str = Field(description="20-50字的结果描述")
+#     url: str = Field(description="有效的访问链接")
+
+
 class State(BaseModel):
     ppt_info: PPTInfo | None
     messages: Annotated[list[AnyMessage], add_messages]
-    ppt_template: str | None = Field(
+    ppt_template_path: str | None = Field(
         description="PPT模板的文件路径，例如template/template.pdf"
     )
     current_timeline: TimeLine = Field(
@@ -66,12 +79,22 @@ class State(BaseModel):
         default=False,
         description="用户是否有PPT模板,如果有则使用用户的模板",
     )
+    grok_search_results: list[dict] | None = Field(
+        default=None,
+        description="根据用户的ppt需求使用grok来搜索相关的页面，list的每一项包含title, description, url字段",
+    )
+    tavily_claw_results: list[dict] | None = Field(
+        default=None,
+        description="根据grok_search_results的搜索到的urls,通过tavily来抓取对应的页面的内容转为markdown的格式,list的每一项包含url, title, raw_content,images字段",
+    )
 
 
 class InputSchema(BaseModel):
     theme: str = Field(
         description="PPT的主题，例如'dify的介绍', '人工智能的发展趋势', '如何提升工作效率'等"
     )
+
+
 
 
 def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
@@ -145,8 +168,61 @@ def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
         "ppt_info": ppt_info,
         "have_ppt_content_files": have_ppt_content_files,
         "have_ppt_template": have_ppt_template,
+        "current_timeline": TimeLine.INFO_GATHERED,
+        # TODO:设置一下ppt_template_path
+        # "ppt_template_path": None,
     }
 
+
+def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
+    # 根据用户输入的ppt信息来搜索相关内容
+    thread_id = config["configurable"].get("thread_id")
+    ppt_info: PPTInfo = state.ppt_info
+    user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+    grok_search_model = ChatOpenAI(
+        model="grok-4.20-beta",
+        base_url=os.environ["GROK_SEARCH_BASE_URL"],
+        api_key=os.environ["GROK_SEARCH_API_KEY"],
+        default_headers={"User-Agent": user_agent},
+    )
+
+    # chain = grok_search_prompt_template | grok_search_model
+    # structured_grok_search_model = grok_search_model.with_structured_output(
+    #     Grok_Search_Result
+    # )
+    chain = grok_search_prompt_template | grok_search_model
+    grok_search_response = chain.with_retry().invoke(
+        {
+            "theme": ppt_info.theme,
+            "target_audience": ppt_info.target_audience,
+            "user_role": ppt_info.user_role,
+            "purpose": ppt_info.purpose,
+        }
+    )
+    json_parser = JsonOutputParser()
+    grok_search_results = json_parser.parse(
+        json_repair.repair_json(grok_search_response.content)
+    )
+    urls = [result.get("url") for result in grok_search_results if result.get("url") is not None]
+    tavily_claw_results = extract_via_travily(urls)
+    return {
+        "grok_search_results": grok_search_results,
+        "tavily_claw_results":tavily_claw_results
+    }
+
+
+def parser_ppt_content_files(state: State, runtime: Runtime):
+    # 解析用户上传的内容文件来获取相关内容
+    pass
+
+
+def parser_ppt_template(
+    state: State,
+    runtime: Runtime,
+):
+    # 解析用户上传的PPT模板文件来获取模板信息
+    pass
 
 
 def start_workflow(input: InputSchema, thread_id: str):
@@ -186,18 +262,29 @@ def get_status(thread_id: str):
     #     )
 
 
-graph = StateGraph(state_schema=State, input_schema=InputSchema)
-graph.add_node("ask_for_ppt_info", ask_for_ppt_info)
-graph.add_edge(START, "ask_for_ppt_info")
-graph.add_edge("ask_for_ppt_info", END)
+# graph = StateGraph(state_schema=State, input_schema=InputSchema)
+# graph.add_node("ask_for_ppt_info", ask_for_ppt_info)
+# graph.add_edge(START, "ask_for_ppt_info")
+# graph.add_edge("ask_for_ppt_info", END)
+
+""""
+test search_ppt_contents node
+"""
+graph = StateGraph(state_schema=State)
+graph.add_node(
+    "search_ppt_contents", search_ppt_contents)
+)
+graph.add_edge(START, "search_ppt_contents")
+graph.add_edge("search_ppt_contents", END)
 
 
 agent = graph.compile(checkpointer=InMemorySaver())
 
 if __name__ == "__main__":
-    config: RunnableConfig = {"configurable": {"thread_id": "1"}}
-    response = agent.invoke({"theme": "AI在企业运营中的落地实践"}, config=config)
-    print(response)
+    # config: RunnableConfig = {"configurable": {"thread_id": "1"}}
+    # response = agent.invoke({"theme": "AI在企业运营中的落地实践"}, config=config)
+    # print(response)
+
     # while response["__interrupt__"]:
     # if response["__interrupt__"]:
     # user_input = {
@@ -210,3 +297,24 @@ if __name__ == "__main__":
 
     # response = agent.invoke(Command(resume=user_input), config=config)
     # print(response)
+
+    """"
+    test search_ppt_contents
+    """
+    config: RunnableConfig = {"configurable": {"thread_id": "zwc_test"}}
+    origin_state = State(
+        ppt_info=PPTInfo(
+            target_audience="企业管理者",
+            user_role="产品经理",
+            purpose="汇报",
+            style="科技风",
+            num_pages=20,
+            theme="dify的介绍",
+        ),
+        messages=[],
+        ppt_template_path="user_data/zwc_test/template/template.pdf",
+        current_timeline=TimeLine.INFO_GATHERED,
+        have_ppt_content_files=False,
+        have_ppt_template=True,
+    )
+    response = agent.invoke(origin_state, config=config)
