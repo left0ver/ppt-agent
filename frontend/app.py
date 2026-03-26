@@ -17,6 +17,8 @@ if "__interrupt__" not in st.session_state:
     st.session_state.__interrupt__ = []
 if "have_ppt_content_files" not in st.session_state:
     st.session_state.have_ppt_content_files = False
+if "have_ppt_template" not in st.session_state:
+    st.session_state.have_ppt_template = False
 # # Display chat messages from history on app rerun
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -106,9 +108,16 @@ if prompt := st.chat_input(
 
 def ppt_content_files_on_dismiss():
     st.session_state.have_ppt_content_files = False
+                    
+    res = requests.post(f"{BACKEND_URL}/resume_upload_ppt_content_files", json={
+        "thread_id": st.session_state.thread_id,
+        "have_ppt_content_files": st.session_state.have_ppt_content_files,
+        }).json()
     
+    st.session_state.messages = res.get("messages", [])
+    st.session_state.__interrupt__ = res.get("__interrupt__", [])
     logging.info(f"have_ppt_content_files: {st.session_state.have_ppt_content_files}")
-    st.rerun()
+    # st.rerun()
 
 
 
@@ -192,7 +201,93 @@ def upload_ppt_content_files():
 
 
 
-# upload_ppt_content_files()
+def ppt_template_on_dismiss():
+    st.session_state.have_ppt_template = False
+    
+    res = requests.post(f"{BACKEND_URL}/resume_upload_ppt_template", json={
+        "thread_id": st.session_state.thread_id,
+        "have_ppt_template": st.session_state.have_ppt_template,
+        }).json()
+
+    st.session_state.messages = res.get("messages", [])
+    st.session_state.__interrupt__ = res.get("__interrupt__", [])
+
+    logging.info(f"have_ppt_template: {st.session_state.have_ppt_template}")
+    # st.rerun()
+
+
+@st.dialog(
+    "上传PPT模板文件", dismissible=True, on_dismiss=ppt_template_on_dismiss
+)
+def upload_ppt_template():
+
+    upload_file = st.file_uploader(
+        label="上传PPT模板文件",
+        type=["pptx", "pdf"],
+        accept_multiple_files=False,
+        label_visibility="hidden",
+        max_upload_size=20,
+    )
+    st.caption(
+        "您可以上传一个PPT模板文件,agent将会根据该模板的风格来制作PPT.</br>如果没有,则agent会根据你的PPT的需求自动选择合适的模板",
+        unsafe_allow_html=True,
+    )
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.button(
+            "没有模板，直接跳过",
+            use_container_width=True,
+            type="secondary",
+            on_click=ppt_template_on_dismiss,
+        )
+
+    with col2:
+        if st.button(
+            "上传PPT模板并继续",
+            type="primary",
+            use_container_width=True,
+        ):
+            if not upload_file:
+                st.toast("请先选择文件", duration=3)
+            else:
+                file = (
+                    "file",
+                    (
+                        upload_file.name,
+                        upload_file.getvalue(),
+                        upload_file.type or "application/octet-stream",
+                    ),
+                )
+                res = requests.post(
+                    f"{BACKEND_URL}/upload_ppt_template",
+                    data={
+                        "thread_id": st.session_state.thread_id,
+                    },
+                    files=[file],
+                ).json()
+                if res["status"] == "success":
+                    st.session_state.have_ppt_template = True
+                    st.toast("上传成功", duration=3)
+                else:
+                    st.toast(f"文件上传失败: {res['message']}", duration=3)
+                    return
+
+                res = requests.post(f"{BACKEND_URL}/resume_upload_ppt_template", json={
+                    "thread_id": st.session_state.thread_id,
+                    "have_ppt_template": st.session_state.have_ppt_template,
+                    }).json()
+
+                st.session_state.messages = res.get("messages", [])
+                st.session_state.__interrupt__ = res.get("__interrupt__", [])
+
+                logging.info(
+                    f"have_ppt_template: {st.session_state.have_ppt_template}"
+                )
+
+                st.rerun()
+
+
 if st.session_state.__interrupt__:
     for interrupt in st.session_state.__interrupt__:
         interrupt_type: InterruptType = InterruptType(interrupt["value"]["type"])
@@ -207,7 +302,12 @@ if st.session_state.__interrupt__:
                     if item["type"] == "str":
                         form_data[key] = st.text_input(item["description"])
                     elif item["type"] == "int":
-                        form_data[key] = st.number_input(item["description"], step=1)
+                        number_input_kwargs = {"step": 1}
+                        if key == "num_pages":
+                            number_input_kwargs.update({"min_value": 1, "max_value": 30})
+                        form_data[key] = st.number_input(
+                            item["description"], **number_input_kwargs
+                        )
                 submitted = st.form_submit_button("提交")
                 print("form_data:", form_data)
                 print("submitted:", submitted)
@@ -235,5 +335,4 @@ if st.session_state.__interrupt__:
             upload_ppt_content_files()
 
         elif interrupt_type == InterruptType.UPLOAD_PPT_TEMPLATE:
-            
-            st.warning("请上传PPT模板，目前该功能尚未实现")    
+            upload_ppt_template()    

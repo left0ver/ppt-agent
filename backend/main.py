@@ -23,6 +23,11 @@ class ResumeUploadPPTContentFilesRequest(BaseModel):
     have_ppt_content_files: bool
 
 
+class ResumeUploadPPTTemplateRequest(BaseModel):
+    thread_id: str
+    have_ppt_template: bool
+
+
 class StartRequest(BaseModel):
     theme: str
     thread_id: str
@@ -55,17 +60,23 @@ def resume_upload_ppt_content_files(req: ResumeUploadPPTContentFilesRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# def upload_ppt_content_files(file):
-#     # 这里可以实现文件的上传逻辑，例如保存到服务器或者云存储，并返回文件的URL
-#     file_url = f"http://example.com/files/{file.filename}"
-#     return file_url
+@app.post("/resume_upload_ppt_template")
+def resume_upload_ppt_template(req: ResumeUploadPPTTemplateRequest):
+    try:
+        return resume_workflow(req.thread_id, req.have_ppt_template)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 
 
 @app.post("/upload_ppt_content_files")
 async def upload_ppt_content_files(
     files: Annotated[list[UploadFile], File(...)],
     thread_id: Annotated[str, Form(...)],
-    timeline: Annotated[str, Form(...)],
 ):
     MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
     save_dir = Path(f"user_data/{thread_id}/context_files")
@@ -80,7 +91,7 @@ async def upload_ppt_content_files(
                     detail=f"文件 {file.filename} 超过最大限制 {MAX_FILE_SIZE / (1024 * 1024)} MB",
                 )
         for i, file in enumerate(files):
-            file_path = save_dir / Path(file.filename).suffix
+            file_path = save_dir / f"{i+1}{Path(file.filename).suffix}"
             with file_path.open("wb") as buffer:
                 while chunk := await file.read(1024 * 1024):  # 1 MB
                     buffer.write(chunk)
@@ -105,6 +116,52 @@ async def upload_ppt_content_files(
 
     finally:
         # 确保在使用完后关闭文件对象
+        file.file.close()
+
+
+@app.post("/upload_ppt_template")
+async def upload_ppt_template(
+    file: Annotated[UploadFile, File(...)],
+    thread_id: Annotated[str, Form(...)],
+):
+    ALLOWED_EXTENSIONS = {".pptx", ".pdf"}
+    MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+    save_dir = Path(f"user_data/{thread_id}/template")
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # 校验文件后缀
+        ext = Path(file.filename).suffix.lower() if file.filename else ""
+        if ext not in ALLOWED_EXTENSIONS:
+            return {"status": "error", "message": f"仅支持上传 pptx/pdf 格式的文件，当前文件后缀为 {ext}"}
+
+        # 校验文件大小
+        if file.size and file.size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"文件 {file.filename} 超过最大限制 {MAX_FILE_SIZE / (1024 * 1024)} MB",
+            )
+
+        file_path = save_dir / f"template{ext}"
+        with file_path.open("wb") as buffer:
+            while chunk := await file.read(1024 * 1024):  # 1 MB
+                buffer.write(chunk)
+        file_size = os.path.getsize(file_path)
+
+        return {
+            "status": "success",
+            "message": f"文件 {file.filename} 上传成功",
+            "file_info": {
+                "filename": file.filename,
+                "content_type": file.content_type,
+                "size_bytes": file_size,
+                "saved_path": str(file_path),
+            },
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
         file.file.close()
 
 

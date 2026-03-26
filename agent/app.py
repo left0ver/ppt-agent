@@ -62,6 +62,10 @@ class State(BaseModel):
         default=False,
         description="用户是否有相关内容文件,如果有则使用用户的文档来做PPT,没有则会根据用户的ppt的需求来搜索内容",
     )
+    have_ppt_template: bool = Field(
+        default=False,
+        description="用户是否有PPT模板,如果有则使用用户的模板",
+    )
 
 
 class InputSchema(BaseModel):
