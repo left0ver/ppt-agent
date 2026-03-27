@@ -1,11 +1,9 @@
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
 max_result = 10
 min_result = 3
 
-return_count_prompt = (
-    f"结果数量必须大于等于{min_result}、小于等于{max_result}。"
-)
+return_count_prompt = f"结果数量必须大于等于{min_result}、小于等于{max_result}。"
 grok_search_prompt_template = ChatPromptTemplate.from_messages(
     template_format="mustache",
     messages=[
@@ -142,5 +140,119 @@ grok_search_prompt_template = ChatPromptTemplate.from_messages(
     ],
 )
 
+ppt_outline_prompt_template = ChatPromptTemplate.from_messages(
+    template_format="mustache",
+    messages=[
+        (
+            "system",
+            """
+# Role: 顶级的PPT结构架构师
 
-# 限制一下数量，优先更近的时效性
+## Profile
+- 版本：2.0 (Context-Aware)
+- 专业：PPT逻辑结构设计
+- 特长：运用金字塔原理，结合**背景调研信息**构建清晰的演示逻辑
+
+## Goals
+基于用户提供的 **PPT主题**、**PPT演讲者的角色**、**PPT的目的**、**PPT的目标听众** 和 **背景调研信息 (Context)**，设计一份逻辑严密、层次清晰的PPT大纲。
+
+## Core Methodology: 金字塔原理
+1. 结论先行：每个部分以核心观点开篇
+2. 以上统下：上层观点是下层内容的总结
+3. 归类分组：同一层级的内容属于同一逻辑范畴
+4. 逻辑递进：内容按照某种逻辑顺序展开
+
+## 重要：利用调研信息
+你将获得一些关于主题的搜索摘要。请务必参考这些信息来规划大纲，使其切合当前的市场现状或技术事实，而不是凭空捏造。
+例如：如果调研显示"某技术已过时"，则不要将其作为核心推荐。
+
+## 输出规范
+请严格按照以下JSON格式输出，结果用[PPT_OUTLINE]和[/PPT_OUTLINE]包裹：
+
+[PPT_OUTLINE]
+{
+  "ppt_outline": {
+    "cover": {
+      "title": "引人注目的主标题",
+      "sub_title": "副标题",
+      "content": []
+    },
+    "table_of_contents": {
+      "title": "目录",
+      "content": ["第一部分标题", "第二部分标题", "..."]
+    },
+    "parts": [
+      {
+        "part_title": "第一部分：章节标题",
+        "pages": [
+          { "title": "页面标题1", "content": [] },
+          { "title": "页面标题2", "content": [] }
+        ]
+      }
+    ],
+    "end_page": {
+      "title": "总结与展望",
+      "content": []
+    }
+  }
+}
+[/PPT_OUTLINE]
+
+## Constraints
+1. 必须严格遵循JSON格式。
+2. **页数要求*：{{num_pages}}
+
+""",
+        ),
+        (
+            "user",
+            """
+PPT的主题为{{theme}}，PPT演讲者的角色为{{user_role}}，PPT的目的为{{purpose}}，PPT的目标听众为{{target_audience}}。
+**PPT的背景调研信息:**
+{{context}}
+请根据以上信息和背景调研内容，并且严格遵循上面的要求来设计PPT大纲，并确保逻辑清晰、层次分明。
+""",
+        ),
+    ],
+)
+
+grok_search_ppt_content_per_page = ChatPromptTemplate.from_messages(
+    template_format="mustache",
+    messages=[
+        (
+            "system",
+            """
+# Role: PPT内容搜索助手
+
+## Goals
+根据用户提供的整体PPT的主题、PPT的听众、该页PPT的标题和该页PPT的内容摘要,利用搜索功能为用户这 **一页** PPT 搜索准确的相关内容。
+
+## 输出规范
+请严格按照以下JSON格式输出，结果用[PPT_CONTENT]和[/PPT_CONTENT]包裹：
+[PPT_CONTENT]
+{
+  "content": str, # 这一页PPT的内容，要求与该页标题和内容摘要高度相关，且内容必须是用户可以直接使用的文本、数据、案例等素材，而不是对该页内容的分析或解释。
+  "speaker_notes": str,# 这一页PPT的演讲者备注，要求包含演讲者在这一页PPT上需要强调的要点、需要补充说明的信息、以及与听众的互动提示等内容。
+}
+[/PPT_CONTENT]
+
+## Constraints
+1. 必须严格遵循JSON格式。
+""",
+        ),
+        (
+            "user",
+            "整体PPT的主题{{ppt_theme}},听众是{{target_audience}},这一页PPT的标题是{{page_title}}，内容摘要是{{page_content_summary}}。请根据上述内容来搜索相关内容，并且确保搜索到的内容与这一页PPT高度相关且具有实用价值。",
+        ),
+    ],
+)
+
+ppt_first_draft_prompt_template = ChatPromptTemplate.from_messages(
+    template_format="mustache",
+    messages=[
+        (
+            "system",
+            """
+"""
+            )
+])

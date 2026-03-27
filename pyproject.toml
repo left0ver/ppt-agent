@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aspose-slides>=26.3.0",
     "fastapi[standard]>=0.135.2",
+    "firecrawl-py>=4.21.0",
     "gohumanloop>=0.0.15",
     "httpx[socks]>=0.28.1",
     "json-repair>=0.58.6",
@@ -15,6 +16,7 @@ dependencies = [
     "langchain-openai>=1.1.11",
     "langgraph>=1.1.3",
     "langgraph-cli[inmem]>=0.4.19",
+    "mineru-kie-sdk>=0.1.1",
     "pymupdf>=1.27.2.2",
     "python-multipart>=0.0.22",
     "streamlit>=1.55.0",

@@ -628,6 +628,33 @@ wheels = [
 ]
 
 [[package]]
+name = "filetype"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/29/745f7d30d47fe0f251d3ad3dc2978a23141917661998763bebb6da007eb1/filetype-1.2.0.tar.gz", hash = "sha256:66b56cd6474bf41d8c54660347d37afcc3f7d1970648de365c102ef77548aadb", size = 998020, upload-time = "2022-11-02T17:34:04.141Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/18/79/1b8fa1bb3568781e84c9200f951c735f3f157429f44be0495da55894d620/filetype-1.2.0-py2.py3-none-any.whl", hash = "sha256:7ce71b6880181241cf7ac8697a2f1eb6a8bd9b429f7ad6d27b8db9ba5f1c2d25", size = 19970, upload-time = "2022-11-02T17:34:01.425Z" },
+]
+
+[[package]]
+name = "firecrawl-py"
+version = "4.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "httpx" },
+    { name = "nest-asyncio" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "requests" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/6b/8201b737c0667bf70748b86a6fb117aefc648154b4e05c5ee649432cbc3d/firecrawl_py-4.21.0.tar.gz", hash = "sha256:14a7e0967d816c711c3c53325c9371e2f780a787d1e94333a34d8aea7a43a237", size = 174256, upload-time = "2026-03-25T16:22:00.002Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/18/f1/1c0f1e5b33a318d7b9705b9e23c4397253d730e516e3d8a2f6aaea4b71a2/firecrawl_py-4.21.0-py3-none-any.whl", hash = "sha256:4e431f36117b4f2aaae633e747859a91626b0f2c6aaa6b7f86dfb7669a3595eb", size = 217607, upload-time = "2026-03-25T16:21:58.708Z" },
+]
+
+[[package]]
 name = "forbiddenfruit"
 version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -721,6 +748,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/a3/5982da14e113d07b325230f95060e2169f5311b1017ea8af2a29b374c289/frozenlist-1.8.0-cp314-cp314t-win_arm64.whl", hash = "sha256:102e6314ca4da683dca92e3b1355490fed5f313b768500084fbe6371fddfdb79", size = 42507, upload-time = "2025-10-06T05:37:54.513Z" },
     { url = "https://files.pythonhosted.org/packages/9a/9a/e35b4a917281c0b8419d4207f4334c8e8c5dbf4f3f5f9ada73958d937dcc/frozenlist-1.8.0-py3-none-any.whl", hash = "sha256:0c18a16eab41e82c295618a77502e17b195883241c563b00f0aa5106fc4eaa0d", size = 13409, upload-time = "2025-10-06T05:38:16.721Z" },
 ]
+
+[[package]]
+name = "func-timeout"
+version = "4.3.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/0d/bf0567477f7281d9a3926c582bfef21bff7498fc0ffd3e9de21811896a0b/func_timeout-4.3.5.tar.gz", hash = "sha256:74cd3c428ec94f4edfba81f9b2f14904846d5ffccc27c92433b8b5939b5575dd", size = 44264, upload-time = "2019-08-19T21:32:07.43Z" }
 
 [[package]]
 name = "gitdb"
@@ -1453,6 +1486,21 @@ wheels = [
 ]
 
 [[package]]
+name = "mineru-kie-sdk"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "filetype" },
+    { name = "func-timeout" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/32/51/8bd8e9b0a55a51201af46046e80f63d9b392e74c6cd402de64e1038e3a83/mineru_kie_sdk-0.1.1.tar.gz", hash = "sha256:b3fa3eb0dee6f735452e25d3d3c42364dbeaa0cb3d6984ac6e772ecf5fca97ab", size = 9726, upload-time = "2026-01-21T12:04:48.398Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/fa/b9be2d377bdb4cade5c5304000c4e48d069823d63fb7038305a5afd2223b/mineru_kie_sdk-0.1.1-py3-none-any.whl", hash = "sha256:2418dd15f360ca2bdfa369b202d220171428f1ffa10822b0701679840f2c7123", size = 8615, upload-time = "2026-01-21T12:04:47.046Z" },
+]
+
+[[package]]
 name = "multidict"
 version = "6.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1558,6 +1606,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/b4/02a8add181b8d2cd5da3b667cd102ae536e8c9572ab1a130816d70a89edb/narwhals-2.18.0.tar.gz", hash = "sha256:1de5cee338bc17c338c6278df2c38c0dd4290499fcf70d75e0a51d5f22a6e960", size = 620222, upload-time = "2026-03-10T15:51:27.14Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fe/75/0b4a10da17a44cf13567d08a9c7632a285297e46253263f1ae119129d10a/narwhals-2.18.0-py3-none-any.whl", hash = "sha256:68378155ee706ac9c5b25868ef62ecddd62947b6df7801a0a156bc0a615d2d0d", size = 444865, upload-time = "2026-03-10T15:51:24.085Z" },
+]
+
+[[package]]
+name = "nest-asyncio"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/f8/51569ac65d696c8ecbee95938f89d4abf00f47d58d48f6fbabfe8f0baefe/nest_asyncio-1.6.0.tar.gz", hash = "sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe", size = 7418, upload-time = "2024-01-21T14:25:19.227Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/c4/c2971a3ba4c6103a3d10c4b0f24f461ddc027f0f09763220cf35ca1401b3/nest_asyncio-1.6.0-py3-none-any.whl", hash = "sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c", size = 5195, upload-time = "2024-01-21T14:25:17.223Z" },
 ]
 
 [[package]]
@@ -1946,6 +2003,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "aspose-slides" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "firecrawl-py" },
     { name = "gohumanloop" },
     { name = "httpx", extra = ["socks"] },
     { name = "json-repair" },
@@ -1954,6 +2012,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langgraph-cli", extra = ["inmem"] },
+    { name = "mineru-kie-sdk" },
     { name = "pymupdf" },
     { name = "python-multipart" },
     { name = "streamlit" },
@@ -1965,6 +2024,7 @@ dependencies = [
 requires-dist = [
     { name = "aspose-slides", specifier = ">=26.3.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.135.2" },
+    { name = "firecrawl-py", specifier = ">=4.21.0" },
     { name = "gohumanloop", specifier = ">=0.0.15" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "json-repair", specifier = ">=0.58.6" },
@@ -1973,6 +2033,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=1.1.11" },
     { name = "langgraph", specifier = ">=1.1.3" },
     { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.4.19" },
+    { name = "mineru-kie-sdk", specifier = ">=0.1.1" },
     { name = "pymupdf", specifier = ">=1.27.2.2" },
     { name = "python-multipart", specifier = ">=0.0.22" },
     { name = "streamlit", specifier = ">=1.55.0" },
