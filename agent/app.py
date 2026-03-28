@@ -1,8 +1,8 @@
+import asyncio
 import json
 import logging
 import os
 import re
-import shutil
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional, TypedDict
@@ -28,15 +28,29 @@ from mineru_parser_batch import MinerUBatchClient
 from prompt import (
     grok_search_ppt_content_per_page,
     grok_search_prompt_template,
+    ppt_final_draft_prompt_template,
+    ppt_first_draft_grid_style_prompt_template,
+    ppt_first_draft_guide_page_prompt_template,
     ppt_outline_prompt_template,
 )
 from pydantic import BaseModel, Field
-from temp import ppt_outline, ppt_page_contents, web_fetch_results
+from task import (
+    generate_final_ppt_task_with_delay,
+    generate_first_draft_task_with_delay,
+    search_page_content_task_with_delay,
+)
+from temp import (
+    first_draft_results,
+    ppt_outline,
+    ppt_page_contents,
+    ppt_part_page_contents,
+    web_fetch_results,
+)
 from utils import ppt2svg, setup_logging
 
 load_dotenv()
 setup_logging()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__file__)
 
 
 class TimeLine(Enum):
@@ -52,6 +66,7 @@ class InterruptType(Enum):
     CONFIRMATION = "confirmation"
     UPLOAD_PPT_CONTENT_FILES = "upload_ppt_content_files"
     UPLOAD_PPT_TEMPLATE = "upload_ppt_template"
+    INPUT = "input"
 
 
 class PPTInfo(BaseModel):
@@ -120,6 +135,13 @@ class State(BaseModel):
     )
     first_draft_results: list[dict] | None = Field(
         default=None, description="初稿的内容，包含每一页的svg内容和保存的文件路径"
+    )
+    user_ppt_style: str | None = Field(
+        default=None,
+        description="用户需要的最终的PPT风格，例如绿色简约风，黑色科技风等",
+    )
+    final_ppt_results: list[dict] | None = Field(
+        default=None, description="根据初稿和用户所需的ppt的风格生成的最终的ppt"
     )
 
 
@@ -384,7 +406,7 @@ def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig)
 
 
 # node
-def generate_ppt_content_per_page(
+async def generate_ppt_content_per_page(
     state: State, runtime: Runtime, config: RunnableConfig
 ):
     have_ppt_content_files = state.have_ppt_content_files
@@ -396,7 +418,7 @@ def generate_ppt_content_per_page(
         # 设置User-Agent来解决被cf拦截的问题
         user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         grok_search_model = ChatOpenAI(
-            model="grok-4.20-beta",
+            model="grok-4.1-thinking",
             base_url=os.environ["GROK_SEARCH_BASE_URL"],
             api_key=os.environ["GROK_SEARCH_API_KEY"],
             default_headers={"User-Agent": user_agent},
@@ -411,37 +433,18 @@ def generate_ppt_content_per_page(
             for i, part in enumerate(ppt_outline_parts)
             for page in part["pages"]
         ]
+
+        ppt_part_page_contents_task = []
         ppt_part_page_contents: list[dict] = []
-        # TODO: 增加并发的操作
-        for ppt_outline_page in ppt_outline_pages:
-            response = chain.invoke(
-                {
-                    "ppt_theme": state.ppt_info.theme,
-                    "target_audience": state.ppt_info.target_audience,
-                    "page_title": ppt_outline_page.get("title", ""),
-                    "page_content_summary": ";".join(
-                        ppt_outline_page.get("page", {}).get("content")
-                    ),
-                }
-            )
-            # 根据[PPT_OUTLINE]和[/PPT_OUTLINE]来提取出PPT的大纲
-            match = re.search(
-                r"\[PPT_CONTENT\]([\s\S]*?)\[/PPT_CONTENT\]", response.content
-            )
-            if match:
-                ppt_page_content_str = match.group(1)
-                ppt_page_content_obj = json_parser.parse(ppt_page_content_str)
-                ppt_part_page_contents.append(
-                    {
-                        "num_part": ppt_outline_page["part"],
-                        "content": ppt_page_content_obj["content"],
-                        "speaker_notes": ppt_page_content_obj["speaker_notes"],
-                    }
+        for i, ppt_outline_page in enumerate(ppt_outline_pages):
+            ppt_part_page_contents_task.append(
+                search_page_content_task_with_delay(
+                    chain, state, ppt_outline_page, i, delay=0.0
                 )
-            else:
-                raise ValueError(
-                    f"在LLM的返回中没有找到[PPT_CONTENT]和[/PPT_CONTENT]来包裹的内容，请确保LLM按照要求输出，并且输出的内容是一个合法的JSON字符串。LLM的原始输出是: {response.content}"
-                )
+            )
+        ppt_part_page_contents: list[dict] = await asyncio.gather(
+            *ppt_part_page_contents_task
+        )
 
         # ppt的封面
         cover_content = json.dumps(state.ppt_outline["cover"], ensure_ascii=False)
@@ -466,13 +469,18 @@ def generate_ppt_content_per_page(
         current_part = -1
         ppt_page_contents = []
         for ppt_page_content in ppt_part_page_contents:
-            if ppt_page_content["num_part"] != current_part:
-                ppt_page_contents.append(
-                    {"type":"part_cover","content": part_contents[current_part], "speaker_notes": ""}
-                )
+            if current_part != ppt_page_content["num_part"]:
                 current_part = ppt_page_content["num_part"]
+                ppt_page_contents.append(
+                    {
+                        "type": "part_cover",
+                        "content": part_contents[current_part],
+                        "speaker_notes": "",
+                    }
+                )
             ppt_page_contents.append(
-                {   "type":"part_page",
+                {
+                    "type": "part_page",
                     "content": ppt_page_content["content"],
                     "speaker_notes": ppt_page_content["speaker_notes"],
                 }
@@ -481,81 +489,139 @@ def generate_ppt_content_per_page(
         ppt_page_contents = (
             [
                 # 封面
-                {"type":"cover","content": cover_content, "speaker_notes": ""},
+                {"type": "cover", "content": cover_content, "speaker_notes": ""},
                 # 目录
-                {"type":"table_of_contents","content": catalog_content, "speaker_notes": ""},
+                {
+                    "type": "table_of_contents",
+                    "content": catalog_content,
+                    "speaker_notes": "",
+                },
             ]
             + ppt_page_contents
             # 结尾页
-            + [{"type":"end_page","content": end_page_content, "speaker_notes": ""}]
+            + [{"type": "end_page", "content": end_page_content, "speaker_notes": ""}]
         )
-    with open(f"user_data/{thread_id}/ppt_page_contents.json", "w", encoding="utf-8") as f:
-        json.dump(ppt_page_contents, f, ensure_ascii=False, indent=4)    
+    with open(
+        f"user_data/{thread_id}/ppt_page_contents.json", "w", encoding="utf-8"
+    ) as f:
+        json.dump(ppt_page_contents, f, ensure_ascii=False, indent=2)
     return {
         "ppt_page_contents": ppt_page_contents,
     }
 
 
 # node
-def generate_first_draft(state: State, runtime: Runtime, config: RunnableConfig):
+async def generate_first_draft(state: State, runtime: Runtime, config: RunnableConfig):
     thread_id = config["configurable"].get("thread_id")
-    prompt_template = """作为精通信息架构与 SVG 编码的专家，你的任务是将完整的文字内容转化为一张高质量、结构化、具备高级感、简洁感和专业感的 SVG 演示文稿页面。要求如下：
-
-1.画布: SVG viewBox 必须是 0 0 1280 720。
-
-2.内容页的便当网格 (Bento Grid) 布局
-这是一种灵活的网格系统，其布局应由内容本身的需求驱动，而非僵硬的模板。通过组合不同尺寸的卡片，创造出动态且视觉有趣的布局。
-- 核心原则:
-    - 灵活性: 卡片数量不固定。可以是 1, 2, 3, 4, 5 或更多个，取决于如何更好地呈现信息。
-    - 层级感: 使用卡片尺寸建立视觉层级。最重要的信息放在最大的卡片上。
-    - 留白: 在所有卡片之间保持至少 20px 的间距。
-- 布局组合示例:
-    - 单一焦点: 一张大卡片覆盖大部分区域 (w=1200, h=580)。适用于单一、有力的信息或详细的图表。
-    - 两栏布局:
-        - 50/50 对称: 两张等宽的卡片。
-        - 非对称: 一张较宽的卡片（如 2/3 宽度）用于主内容，一张较窄的（1/3 宽度）用于辅助信息、数据或图片。
-    - 三栏布局: 三张等宽的卡片，适合并列比较三项内容。
-    - 主次结合: 一张大的居中卡片，两侧各一张小的垂直卡片。
-    - 顶部英雄式: 顶部一张宽幅“英雄”卡片，下方是 2-4 个较小的等宽卡片网格。
-    - 混合网格 (自由度最高): 自由混合各种尺寸的卡片，例如一个中等方块、两个小的水平矩形和一个垂直矩形。这种方式可以极大地适应不同内容的需求。
-
-
-请你根据我的内容输出SVG代码，我的内容是：
-{{page_content}}
-"""
     # 封面结尾页的生成
-    prompt = PromptTemplate.from_template(prompt_template, template_format="mustache")
+    # prompt = PromptTemplate.from_template(prompt_template, template_format="mustache")
+
     generate_first_draft_model = ChatOpenAI(
         model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
         base_url=os.getenv("GEMINI_BASE_URL"),
         api_key=os.getenv("GEMINI_API_KEY"),
     )
-    chain = prompt | generate_first_draft_model
+    content_page_chain = (
+        ppt_first_draft_grid_style_prompt_template | generate_first_draft_model
+    )
+    cover_page_chain = (
+        ppt_first_draft_guide_page_prompt_template | generate_first_draft_model
+    )
     ppt_page_contents = state.ppt_page_contents
-    first_draft_results = []
+
+    tasks = []
     for i, ppt_page_content in enumerate(ppt_page_contents):
-        num_part, page_content = (
-            ppt_page_content.get("part"),
-            ppt_page_content.get("content"),
+        page_content = ppt_page_content.get("content")
+        if ppt_page_content["type"] == "part_page":
+            chain = content_page_chain
+        else:
+            chain = cover_page_chain
+        tasks.append(
+            generate_first_draft_task_with_delay(
+                chain, page_content, thread_id, i, delay=0.0
+            )
         )
-        response = chain.invoke({"page_content": page_content})
-        # 将LLM的输出保存为svg文件
-        svg_content = response.content
-        svg_file_path = Path(f"user_data/{thread_id}/first_draft/page_{i + 1}.svg")
-        svg_file_path.parent.mkdir(parents=True, exist_ok=True)
-        svg_file_path.write_text(svg_content, encoding="utf-8")
-        logger.info(f"第{i + 1}页的初稿已经生成并保存到{svg_file_path}")
-        first_draft_results.append(
-            {"page": i + 1, "svg_content": svg_content, "file_path": str(svg_file_path)}
-        )
+    first_draft_results = await asyncio.gather(*tasks)
+
+    with open(
+        f"user_data/{thread_id}/first_draft_results.json", "w", encoding="utf-8"
+    ) as f:
+        json.dump(first_draft_results, f, ensure_ascii=False, indent=2)
     return {
         "first_draft_results": first_draft_results,
     }
 
 
+def inquire_style(state: State, runtime: Runtime, config: RunnableConfig):
+    thread_id = config["configurable"].get("thread_id")
+    # 使用中断来让给用户确定PPT的风格
+    user_ppt_style = interrupt(
+        {
+            "title": "请输入你想要的PPT的整体风格(包含颜色+风格)，例如绿色简约风，黑色科技风等",
+            "type": InterruptType.INPUT,
+        }
+    )
+    return {
+        "user_ppt_style": user_ppt_style,
+    }
+
+
 # node
-def generate_final_ppt(state: State, runtime: Runtime):
-    pass
+async def generate_final_ppt(state: State, runtime: Runtime, config: RunnableConfig):
+    """根据用户最终的PPT风格以及生成的初稿来生成终稿"""
+    thread_id = config["configurable"].get("thread_id")
+    generate_final_ppt_model = ChatOpenAI(
+        model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
+        base_url=os.getenv("GEMINI_BASE_URL"),
+        api_key=os.getenv("GEMINI_API_KEY"),
+    )
+    chain = ppt_final_draft_prompt_template | generate_final_ppt_model
+    first_draft_results = state.first_draft_results
+    final_ppt_results = []
+    final_ppt_generate_tasks = []
+
+    for index, first_draft_result in enumerate(first_draft_results):
+        final_ppt_generate_tasks.append(
+            generate_final_ppt_task_with_delay(
+                chain,
+                first_draft_result,
+                state.user_ppt_style,
+                thread_id,
+                index,
+                delay=0.0,
+            )
+        )
+    final_ppt_results = await asyncio.gather(*final_ppt_generate_tasks)
+    with open(
+        f"user_data/{thread_id}/final_ppt_results.json", "w", encoding="utf-8"
+    ) as f:
+        json.dump(final_ppt_results, f, ensure_ascii=False, indent=2)
+    return {"final_ppt_results": final_ppt_results}
+    # final_ppt_path = Path(f"user_data/{thread_id}/final_ppt/page_{index + 1}.svg")
+    # response = chain.invoke(
+    #     {
+    #         "first_draft_svg_code": first_draft_result.get("svg_content", ""),
+    #         "user_ppt_style": state.user_ppt_style or "",
+    #     }
+    # )
+    # # 正则表达式提取svg的内容
+    # svg_match = re.search(r"<svg\b[^>]*>[\s\S]*?<\/svg>", response.content)
+    # if svg_match:
+    #     svg_content = svg_match.group(0)
+    # else:
+    #     raise ValueError(
+    #         f"在LLM的返回中没有找到<svg>标签来包裹的内容，请确保LLM按照要求输出，并且输出的内容包含一个合法的SVG字符串。LLM的原始输出是: {response.content}"
+    #     )
+    # final_ppt_path.parent.mkdir(parents=True, exist_ok=True)
+    # final_ppt_path.write_text(svg_content, encoding="utf-8")
+    # final_ppt_results.append(
+    #     {
+    #         "page": index + 1,
+    #         "svg_content": svg_content,
+    #         "file_path": str(final_ppt_path),
+    #     }
+    # )
+    # logger.info(f"第{index + 1}页的初稿已经生成并保存到{final_ppt_path}")
 
 
 def start_workflow(input: InputSchema, thread_id: str):
@@ -575,34 +641,7 @@ def get_status(thread_id: str):
     current_state = agent.get_state(config)
     return current_state.values.get("current_timeline", TimeLine.NO_START)
 
-    # while True:
-    #     new_required = {}
-    #     if target_audience is None:
-    #         new_required["target_audience"] = "PPT的目标群体"
-    #     if user_role is None:
-    #         new_required["user_role"] = "用户的角色，例如软件工程师、学生、产品经理"
-    #     if purpose is None:
-    #         new_required["purpose"] = "PPT的目的，例如汇报、演讲、培训"
-    #     if style is None:
-    #         new_required["style"] = "PPT的风格，例如商务风、简约风、科技风"
-    #     if num_pages is None or not (1 <= num_pages <= 30):
-    #         new_required["num_pages"] = "PPT的页数,1—30页"
-    #     new_user_input = interrupt(
-    #         {
-    #             "title": "请你输入以下信息来帮助我更好地理解你的需求：",
-    #             "required_data": new_required,
-    #         }
-    #     )
 
-
-# graph = StateGraph(state_schema=State, input_schema=InputSchema)
-# graph.add_node("ask_for_ppt_info", ask_for_ppt_info)
-# graph.add_edge(START, "ask_for_ppt_info")
-# graph.add_edge("ask_for_ppt_info", END)
-
-""""
-test search_ppt_contents node
-"""
 graph = StateGraph(state_schema=State, input_schema=InputSchema)
 graph.add_node("ask_for_ppt_info", ask_for_ppt_info)
 graph.add_node("search_ppt_contents", search_ppt_contents)
@@ -611,6 +650,7 @@ graph.add_node("parser_ppt_template", parser_ppt_template)
 graph.add_node("generate_ppt_outline", generate_ppt_outline)
 graph.add_node("generate_ppt_content_per_page", generate_ppt_content_per_page)
 graph.add_node("generate_first_draft", generate_first_draft)
+graph.add_node("inquire_style", inquire_style)
 graph.add_node("generate_final_ppt", generate_final_ppt)
 graph.add_edge(START, "ask_for_ppt_info")
 graph.add_conditional_edges(
@@ -627,7 +667,8 @@ graph.add_edge("parser_ppt_content_files", "parser_ppt_template")
 graph.add_edge("parser_ppt_template", "generate_ppt_outline")
 graph.add_edge("generate_ppt_outline", "generate_ppt_content_per_page")
 graph.add_edge("generate_ppt_content_per_page", "generate_first_draft")
-graph.add_edge("generate_first_draft", "generate_final_ppt")
+graph.add_edge("generate_first_draft", "inquire_style")
+graph.add_edge("inquire_style", "generate_final_ppt")
 graph.add_edge("generate_final_ppt", END)
 
 agent = graph.compile(checkpointer=InMemorySaver())
@@ -650,38 +691,46 @@ if __name__ == "__main__":
 
     # response = agent.invoke(Command(resume=user_input), config=config)
     # print(response)
-    save_graph = True
-    graph_name = "ppt_generation_agent_graph.png"
-    if save_graph:
-        graph_png = agent.get_graph(xray=True).draw_mermaid_png()
-        save_path = Path(graph_name)
-        save_path.write_bytes(graph_png)
-        print(f"Graph image saved to: {save_path}")
+    async def main():
+        save_graph = True
+        graph_name = "ppt_generation_agent_graph.png"
+        if save_graph:
+            graph_png = agent.get_graph(xray=True).draw_mermaid_png()
+            save_path = Path(graph_name)
+            save_path.write_bytes(graph_png)
+            print(f"Graph image saved to: {save_path}")
 
-    """"
-    test search_ppt_contents
-    """
-    config: RunnableConfig = {"configurable": {"thread_id": "zwc_test"}}
+        """"
+        test search_ppt_contents
+        """
+        config: RunnableConfig = {"configurable": {"thread_id": "zwc_test"}}
 
-    origin_state = State(
-        ppt_info=PPTInfo(
-            target_audience="企业管理者",
-            user_role="产品经理",
-            purpose="汇报",
-            style="科技风",
-            num_pages=20,
-            theme="Dify企业介绍",
-        ),
-        messages=[],
-        ppt_template_path="user_data/zwc_test/template/template.pdf",
-        current_timeline=TimeLine.INFO_GATHERED,
-        have_ppt_content_files=False,
-        have_ppt_template=False,
-        web_fetch_results=web_fetch_results,
-        ppt_outline=ppt_outline,
-        ppt_page_contents=ppt_page_contents,
-    )
-    fork_config = agent.update_state(
-        config, origin_state, as_node="generate_ppt_content_per_page"
-    )
-    response = agent.invoke(None, config=fork_config)
+        origin_state = State(
+            ppt_info=PPTInfo(
+                target_audience="企业管理者",
+                user_role="产品经理",
+                purpose="汇报",
+                style="科技风",
+                num_pages=20,
+                theme="Dify企业介绍",
+            ),
+            messages=[],
+            ppt_template_path="user_data/zwc_test/template/template.pdf",
+            current_timeline=TimeLine.INFO_GATHERED,
+            have_ppt_content_files=False,
+            have_ppt_template=False,
+            web_fetch_results=web_fetch_results,
+            ppt_outline=ppt_outline,
+            ppt_page_contents=ppt_page_contents,
+            first_draft_results=first_draft_results,
+            user_ppt_style="绿色简约风",
+        )
+        fork_config = agent.update_state(config, origin_state, as_node="inquire_style")
+        response = await agent.ainvoke(None, config=fork_config)
+        # if response["__interrupt__"]:
+        #     # print("Workflow is interrupted, waiting for user input...")
+        #     response = agent.invoke(Command(resume="绿色简约风"), config=config)
+        # # response = await agent.ainvoke()
+        print(response)
+
+    asyncio.run(main())
