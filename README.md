@@ -51,8 +51,8 @@
 4. [grok无限用](https://linux.do/t/topic/1697476)
 
 ##  TODO
-
-- [ ] 支持用户提供url来生成内容，这里可以使用travil来fetch对应的网页
+- [x] 支持用户提供url来作为ppt内容的来源，这里可以使用travil来fetch对应的网页
+- [ ] markdown的文件不解析，只有docx和pdf的文件才使用mineru解析
 - [ ] 用户没有提供ppt内容的文档,感觉可以删掉search_ppt_contents这个节点,可以先ai根据主题之类的生成outline,之后再根据outline来使用grok生成每一页的内容。
 - [ ] 考虑不同的布局特征：居中型、分栏型、卡片型、大标题型、数据看板型等
 - [ ] 去掉用户输入汇报目标和ppt风格,ppt的风格在终稿前进行询问，如果用户上传了PPT模板，则不询问

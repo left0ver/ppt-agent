@@ -39,7 +39,7 @@ from task import (
     generate_final_ppt_task_with_delay,
     generate_first_draft_task_with_delay,
     search_page_content_task_with_delay,
-    extract_page_content_task_with_delay
+    extract_page_content_task_with_delay,
 )
 from temp import (
     first_draft_results,
@@ -47,7 +47,7 @@ from temp import (
     ppt_outline,
     ppt_page_contents,
     web_fetch_results,
-    user_content
+    user_content,
 )
 from utils import ppt2svg, setup_logging
 
@@ -109,6 +109,10 @@ class State(BaseModel):
         default=False,
         description="用户是否有相关内容文件,如果有则使用用户的文档来做PPT,没有则会根据用户的ppt的需求来搜索内容",
     )
+    ppt_content_source_urls: list[str] | None = Field(
+        default=None, description="用户提供的ppt内容相关的urls,如果用户有提供的话"
+    )
+
     have_ppt_template: bool = Field(
         default=False,
         description="用户是否有PPT模板,如果有则使用用户的模板",
@@ -213,13 +217,19 @@ def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
             )
             break
 
-    have_ppt_content_files = interrupt(
+    ppt_content_source_from_user = interrupt(
         {
-            "title": "你可以上传PPT内容相关的文件,如果没有可以直接跳过",
+            "title": "你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过",
             "type": InterruptType.UPLOAD_PPT_CONTENT_FILES,
             "file_type": ["pdf", "docx", "markdown"],
         }
     )
+    # ppt_content_source_urls:list[str]
+    have_ppt_content_files, ppt_content_source_urls = (
+        ppt_content_source_from_user["have_ppt_content_files"],
+        ppt_content_source_from_user.get("ppt_content_source_urls", None),
+    )
+
     have_ppt_template = interrupt(
         {
             "title": "你可以上传一个PPT模板文件，如果没有可以直接跳过",
@@ -232,9 +242,20 @@ def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
         "have_ppt_content_files": have_ppt_content_files,
         "have_ppt_template": have_ppt_template,
         "current_timeline": TimeLine.INFO_GATHERED,
+        "ppt_content_source_urls": ppt_content_source_urls,
         # TODO:设置一下ppt_template_path
         # "ppt_template_path": None,
     }
+
+
+# conditional_edge
+def route_via_ppt_content_files(state: State):
+    # 如果用户有内容文件则走内容文件的流程，没有则走搜索内容的流程
+    have_ppt_content_files = state.have_ppt_content_files
+    if have_ppt_content_files:
+        return "parser"
+    else:
+        return "search"
 
 
 # node
@@ -334,14 +355,24 @@ def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableCon
     }
 
 
-# conditional_edge
-def route_via_ppt_content_files(state: State):
-    # 如果用户有内容文件则走内容文件的流程，没有则走搜索内容的流程
-    have_ppt_content_files = state.have_ppt_content_files
-    if have_ppt_content_files:
-        return "parser"
+def parser_ppt_content_urls(state: State, runtime: Runtime, config: RunnableConfig):
+    ppt_content_source_urls = state.ppt_content_source_urls
+    if ppt_content_source_urls is None or len(ppt_content_source_urls) <= 0:
+        return {}
     else:
-        return "search"
+        ppt_content_files_markdown_contents: list[str] = (
+            state.ppt_content_files_markdown_contents or []
+        )
+        web_fetch_client = ExtractorFactory(
+            provider=os.environ.get("PAGE_EXTRACTOR_PROVIDER", "tavily")
+        )
+        web_fetch_results = web_fetch_client.extract_with_retry(ppt_content_source_urls)
+        for web_fetch_result in web_fetch_results:
+            markdown_content = web_fetch_result.get("markdown_content", "")
+            ppt_content_files_markdown_contents.append(markdown_content)
+        return {
+            "ppt_content_files_markdown_contents": ppt_content_files_markdown_contents,
+        }
 
 
 # node
@@ -469,7 +500,7 @@ async def generate_ppt_content_per_page(
             )
         ppt_part_page_contents: list[dict] = await asyncio.gather(
             *ppt_part_page_contents_task
-        )   
+        )
 
     else:
         chain = grok_search_ppt_content_per_page_prompt_template | grok_search_model
@@ -636,7 +667,6 @@ async def generate_final_ppt(state: State, runtime: Runtime, config: RunnableCon
     return {"final_ppt_results": final_ppt_results}
 
 
-
 def start_workflow(input: InputSchema, thread_id: str):
     config = RunnableConfig(configurable={"thread_id": thread_id})
     response = agent.invoke(input, config=config)
@@ -659,6 +689,7 @@ graph = StateGraph(state_schema=State, input_schema=InputSchema)
 graph.add_node("ask_for_ppt_info", ask_for_ppt_info)
 graph.add_node("search_ppt_contents", search_ppt_contents)
 graph.add_node("parser_ppt_content_files", parser_ppt_content_files)
+graph.add_node("parser_ppt_content_urls", parser_ppt_content_urls)
 graph.add_node("parser_ppt_template", parser_ppt_template)
 graph.add_node("generate_ppt_outline", generate_ppt_outline)
 graph.add_node("generate_ppt_content_per_page", generate_ppt_content_per_page)
@@ -674,9 +705,10 @@ graph.add_conditional_edges(
         "search": "search_ppt_contents",
     },
 )
+graph.add_edge("parser_ppt_content_files", "parser_ppt_content_urls")
 
 graph.add_edge("search_ppt_contents", "parser_ppt_template")
-graph.add_edge("parser_ppt_content_files", "parser_ppt_template")
+graph.add_edge("parser_ppt_content_urls", "parser_ppt_template")
 graph.add_edge("parser_ppt_template", "generate_ppt_outline")
 graph.add_edge("generate_ppt_outline", "generate_ppt_content_per_page")
 graph.add_edge("generate_ppt_content_per_page", "generate_first_draft")
@@ -731,17 +763,18 @@ if __name__ == "__main__":
             ppt_template_path="user_data/zwc_test/template/template.pdf",
             current_timeline=TimeLine.INFO_GATHERED,
             have_ppt_content_files=True,
+            ppt_content_source_urls=["https://ghostty.org/docs/install/binary"],
             ppt_content_files_markdown_contents=ppt_content_files_markdown_contents,
             have_ppt_template=False,
             web_fetch_results=web_fetch_results,
             ppt_outline=ppt_outline,
-            user_content = user_content,
+            user_content=user_content,
             ppt_page_contents=ppt_page_contents,
             first_draft_results=first_draft_results,
             user_ppt_style="绿色简约风",
         )
         fork_config = agent.update_state(
-            config, origin_state, as_node="inquire_style"
+            config, origin_state, as_node="parser_ppt_content_files"
         )
         response = await agent.ainvoke(None, config=fork_config)
         # if response["__interrupt__"]:
