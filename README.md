@@ -51,10 +51,9 @@
 4. [grok无限用](https://linux.do/t/topic/1697476)
 
 ##  TODO
-一、
-0. 对于用户输入的文档，使用mineru对其进行解析
-  - 在generate_ppt_content_per_page这个节点中，让ai根据用户的文档来生成最终的ppt内容
-1. 用户没有提供ppt内容的文档,感觉可以删掉search_ppt_contents这个节点,可以先ai根据主题之类的生成outline,之后再根据outline来使用grok生成每一页的内容。
-二、
-1. 去掉用户输入汇报目标和ppt风格（在最终稿前输入）
-2. 考虑不同的布局特征：居中型、分栏型、卡片型、大标题型、数据看板型等
+
+- [ ] 支持用户提供url来生成内容，这里可以使用travil来fetch对应的网页
+- [ ] 用户没有提供ppt内容的文档,感觉可以删掉search_ppt_contents这个节点,可以先ai根据主题之类的生成outline,之后再根据outline来使用grok生成每一页的内容。
+- [ ] 考虑不同的布局特征：居中型、分栏型、卡片型、大标题型、数据看板型等
+- [ ] 去掉用户输入汇报目标和ppt风格,ppt的风格在终稿前进行询问，如果用户上传了PPT模板，则不询问
+- [ ] 根据ppt模板来生成终稿

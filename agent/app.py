@@ -26,7 +26,8 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
 from mineru_parser_batch import MinerUBatchClient
 from prompt import (
-    grok_search_ppt_content_per_page,
+    extracted_page_content_from_user_content_prompt_template,
+    grok_search_ppt_content_per_page_prompt_template,
     grok_search_prompt_template,
     ppt_final_draft_prompt_template,
     ppt_first_draft_grid_style_prompt_template,
@@ -38,13 +39,15 @@ from task import (
     generate_final_ppt_task_with_delay,
     generate_first_draft_task_with_delay,
     search_page_content_task_with_delay,
+    extract_page_content_task_with_delay
 )
 from temp import (
     first_draft_results,
+    ppt_content_files_markdown_contents,
     ppt_outline,
     ppt_page_contents,
-    ppt_part_page_contents,
     web_fetch_results,
+    user_content
 )
 from utils import ppt2svg, setup_logging
 
@@ -129,6 +132,10 @@ class State(BaseModel):
         default=None,
         description="根据用户的需求和背景调研信息生成的PPT大纲，包含封面、目录、各个部分的标题和每一页的标题以及结尾页",
     )
+    user_content: str | None = Field(
+        default=None,
+        description="用户上传的内容文件解析成的文本形式，会在之后生成每一页的内容时作为上下文提供给LLM",
+    )
     ppt_page_contents: list[dict] | None = Field(
         default=None,
         description="每一项包含该页ppt的内容以及演讲者的备注，内容会在后面用来生成ppt的初稿和最终稿",
@@ -154,6 +161,7 @@ class InputSchema(BaseModel):
 # node
 def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
     # PPT的相关信息
+    # TODO: 去掉一些不需要的信息的询问
     required_data = {
         "target_audience": {"type": "str", "description": "PPT的目标群体"},
         "user_role": {
@@ -230,6 +238,7 @@ def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
 
 
 # node
+# 如果用户没有上传文档，则会使用grok+tavily 来根据ppt的主题来搜索一些相关的内容，结果会被用来生成ppt-outline
 def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
     thread_id = config["configurable"].get("thread_id")
     ppt_info: PPTInfo = state.ppt_info
@@ -274,6 +283,9 @@ def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
 
 # node
 def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableConfig):
+    """
+    使用mineru解析用户上传的文件
+    """
     thread_id = config["configurable"].get("thread_id")
     ppt_content_dir = Path(f"user_data/{thread_id}/context_files")
     parsed_output_dir = Path(f"user_data/{thread_id}/context_parse")
@@ -285,8 +297,7 @@ def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableCon
     file_paths = sorted(path for path in ppt_content_dir.iterdir() if path.is_file())
     if not file_paths:
         return {
-            "parsed_ppt_content_files": [],
-            "ppt_content_parse_batch_id": None,
+            "ppt_content_files_markdown_contents": None,
         }
 
     mineru_client = MinerUBatchClient.from_env()
@@ -312,6 +323,12 @@ def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableCon
     ppt_content_files_markdown_contents = [
         file["markdown_content"] for file in parsed_files
     ]
+    with open(
+        f"user_data/{thread_id}/ppt_content_files_markdown_contents.json",
+        "w",
+        encoding="utf-8",
+    ) as f:
+        json.dump(ppt_content_files_markdown_contents, f, ensure_ascii=False, indent=2)
     return {
         "ppt_content_files_markdown_contents": ppt_content_files_markdown_contents,
     }
@@ -364,7 +381,10 @@ def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig)
     thread_id = config["configurable"].get("thread_id")
     # context =
     # context_list = state.ppt_content_files_markdown_contents or state.web_fetch_results or None
-    if state.ppt_content_files_markdown_contents is not None:
+    if (
+        state.ppt_content_files_markdown_contents is not None
+        and len(state.ppt_content_files_markdown_contents) > 0
+    ):
         context_list = state.ppt_content_files_markdown_contents
     elif state.web_fetch_results is not None:
         context_list = [
@@ -402,7 +422,15 @@ def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig)
     if match:
         ppt_outline_json_str = match.group(1)
         ppt_outline = json_parser.parse(ppt_outline_json_str)["ppt_outline"]
-    return {"ppt_outline": ppt_outline}
+    with open(f"user_data/{thread_id}/ppt_outline.json", "w", encoding="utf-8") as f:
+        json.dump(ppt_outline, f, ensure_ascii=False, indent=2)
+    if (
+        state.ppt_content_files_markdown_contents is not None
+        and len(state.ppt_content_files_markdown_contents) > 0
+    ):
+        return {"ppt_outline": ppt_outline, "user_content": context}
+    else:
+        return {"ppt_outline": ppt_outline, "user_content": None}
 
 
 # node
@@ -411,31 +439,40 @@ async def generate_ppt_content_per_page(
 ):
     have_ppt_content_files = state.have_ppt_content_files
     thread_id = config["configurable"].get("thread_id")
+    # 设置User-Agent来解决被cf拦截的问题
+    user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    grok_search_model = ChatOpenAI(
+        model="grok-4.1-thinking",
+        base_url=os.environ["GROK_SEARCH_BASE_URL"],
+        api_key=os.environ["GROK_SEARCH_API_KEY"],
+        default_headers={"User-Agent": user_agent},
+    )
+    ppt_outline_parts = state.ppt_outline["parts"]
+    ppt_outline_pages = [
+        {"type": "page", "part": i, "page": page}
+        for i, part in enumerate(ppt_outline_parts)
+        for page in part["pages"]
+    ]
+
+    ppt_part_page_contents_task = []
+    ppt_part_page_contents: list[dict] = []
     if have_ppt_content_files:
         # 使用用户上传的文件来作为内容的来源
-        pass
-    else:
-        # 设置User-Agent来解决被cf拦截的问题
-        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        grok_search_model = ChatOpenAI(
-            model="grok-4.1-thinking",
-            base_url=os.environ["GROK_SEARCH_BASE_URL"],
-            api_key=os.environ["GROK_SEARCH_API_KEY"],
-            default_headers={"User-Agent": user_agent},
+        chain = (
+            extracted_page_content_from_user_content_prompt_template | grok_search_model
         )
-        json_parser = JsonOutputParser()
-        chain = grok_search_ppt_content_per_page | grok_search_model
-        ppt_outline_pages = []
-        ppt_outline_parts = state.ppt_outline["parts"]
+        for i, ppt_outline_page in enumerate(ppt_outline_pages):
+            ppt_part_page_contents_task.append(
+                extract_page_content_task_with_delay(
+                    chain, state, ppt_outline_page, i, delay=0.0
+                )
+            )
+        ppt_part_page_contents: list[dict] = await asyncio.gather(
+            *ppt_part_page_contents_task
+        )   
 
-        ppt_outline_pages = [
-            {"type": "page", "part": i, "page": page}
-            for i, part in enumerate(ppt_outline_parts)
-            for page in part["pages"]
-        ]
-
-        ppt_part_page_contents_task = []
-        ppt_part_page_contents: list[dict] = []
+    else:
+        chain = grok_search_ppt_content_per_page_prompt_template | grok_search_model
         for i, ppt_outline_page in enumerate(ppt_outline_pages):
             ppt_part_page_contents_task.append(
                 search_page_content_task_with_delay(
@@ -446,61 +483,61 @@ async def generate_ppt_content_per_page(
             *ppt_part_page_contents_task
         )
 
-        # ppt的封面
-        cover_content = json.dumps(state.ppt_outline["cover"], ensure_ascii=False)
-        catalog_content = json.dumps(
-            state.ppt_outline["table_of_contents"], ensure_ascii=False
+    # ppt的封面
+    cover_content = json.dumps(state.ppt_outline["cover"], ensure_ascii=False)
+    catalog_content = json.dumps(
+        state.ppt_outline["table_of_contents"], ensure_ascii=False
+    )
+    end_page_content = json.dumps(state.ppt_outline["end_page"], ensure_ascii=False)
+    # 处理不同部分的封面
+    part_contents = []
+    for part in state.ppt_outline["parts"]:
+        part_title = part.get("part_title", "")
+        page_titles = [page.get("title", "") for page in part.get("pages", [])]
+        part_content = json.dumps(
+            {
+                "part_title": part_title,
+                "page_titles": page_titles,
+            },
+            ensure_ascii=False,
         )
-        end_page_content = json.dumps(state.ppt_outline["end_page"], ensure_ascii=False)
-        # 处理不同部分的封面
-        part_contents = []
-        for part in state.ppt_outline["parts"]:
-            part_title = part.get("part_title", "")
-            page_titles = [page.get("title", "") for page in part.get("pages", [])]
-            part_content = json.dumps(
-                {
-                    "part_title": part_title,
-                    "page_titles": page_titles,
-                },
-                ensure_ascii=False,
-            )
-            part_contents.append(part_content)
-        # 最后得到 ppt_page_contents包含ppt的所有页用于生成初稿的内容
-        current_part = -1
-        ppt_page_contents = []
-        for ppt_page_content in ppt_part_page_contents:
-            if current_part != ppt_page_content["num_part"]:
-                current_part = ppt_page_content["num_part"]
-                ppt_page_contents.append(
-                    {
-                        "type": "part_cover",
-                        "content": part_contents[current_part],
-                        "speaker_notes": "",
-                    }
-                )
+        part_contents.append(part_content)
+    # 最后得到 ppt_page_contents包含ppt的所有页用于生成初稿的内容
+    current_part = -1
+    ppt_page_contents = []
+    for ppt_page_content in ppt_part_page_contents:
+        if current_part != ppt_page_content["num_part"]:
+            current_part = ppt_page_content["num_part"]
             ppt_page_contents.append(
                 {
-                    "type": "part_page",
-                    "content": ppt_page_content["content"],
-                    "speaker_notes": ppt_page_content["speaker_notes"],
+                    "type": "part_cover",
+                    "content": part_contents[current_part],
+                    "speaker_notes": "",
                 }
             )
-
-        ppt_page_contents = (
-            [
-                # 封面
-                {"type": "cover", "content": cover_content, "speaker_notes": ""},
-                # 目录
-                {
-                    "type": "table_of_contents",
-                    "content": catalog_content,
-                    "speaker_notes": "",
-                },
-            ]
-            + ppt_page_contents
-            # 结尾页
-            + [{"type": "end_page", "content": end_page_content, "speaker_notes": ""}]
+        ppt_page_contents.append(
+            {
+                "type": "part_page",
+                "content": ppt_page_content["content"],
+                "speaker_notes": ppt_page_content["speaker_notes"],
+            }
         )
+
+    ppt_page_contents = (
+        [
+            # 封面
+            {"type": "cover", "content": cover_content, "speaker_notes": ""},
+            # 目录
+            {
+                "type": "table_of_contents",
+                "content": catalog_content,
+                "speaker_notes": "",
+            },
+        ]
+        + ppt_page_contents
+        # 结尾页
+        + [{"type": "end_page", "content": end_page_content, "speaker_notes": ""}]
+    )
     with open(
         f"user_data/{thread_id}/ppt_page_contents.json", "w", encoding="utf-8"
     ) as f:
@@ -597,31 +634,7 @@ async def generate_final_ppt(state: State, runtime: Runtime, config: RunnableCon
     ) as f:
         json.dump(final_ppt_results, f, ensure_ascii=False, indent=2)
     return {"final_ppt_results": final_ppt_results}
-    # final_ppt_path = Path(f"user_data/{thread_id}/final_ppt/page_{index + 1}.svg")
-    # response = chain.invoke(
-    #     {
-    #         "first_draft_svg_code": first_draft_result.get("svg_content", ""),
-    #         "user_ppt_style": state.user_ppt_style or "",
-    #     }
-    # )
-    # # 正则表达式提取svg的内容
-    # svg_match = re.search(r"<svg\b[^>]*>[\s\S]*?<\/svg>", response.content)
-    # if svg_match:
-    #     svg_content = svg_match.group(0)
-    # else:
-    #     raise ValueError(
-    #         f"在LLM的返回中没有找到<svg>标签来包裹的内容，请确保LLM按照要求输出，并且输出的内容包含一个合法的SVG字符串。LLM的原始输出是: {response.content}"
-    #     )
-    # final_ppt_path.parent.mkdir(parents=True, exist_ok=True)
-    # final_ppt_path.write_text(svg_content, encoding="utf-8")
-    # final_ppt_results.append(
-    #     {
-    #         "page": index + 1,
-    #         "svg_content": svg_content,
-    #         "file_path": str(final_ppt_path),
-    #     }
-    # )
-    # logger.info(f"第{index + 1}页的初稿已经生成并保存到{final_ppt_path}")
+
 
 
 def start_workflow(input: InputSchema, thread_id: str):
@@ -707,25 +720,29 @@ if __name__ == "__main__":
 
         origin_state = State(
             ppt_info=PPTInfo(
-                target_audience="企业管理者",
-                user_role="产品经理",
+                target_audience="导师以及同学",
+                user_role="学生",
                 purpose="汇报",
-                style="科技风",
-                num_pages=20,
-                theme="Dify企业介绍",
+                style="学术风",
+                num_pages=10,
+                theme="DeekSeek R1的介绍",
             ),
             messages=[],
             ppt_template_path="user_data/zwc_test/template/template.pdf",
             current_timeline=TimeLine.INFO_GATHERED,
-            have_ppt_content_files=False,
+            have_ppt_content_files=True,
+            ppt_content_files_markdown_contents=ppt_content_files_markdown_contents,
             have_ppt_template=False,
             web_fetch_results=web_fetch_results,
             ppt_outline=ppt_outline,
+            user_content = user_content,
             ppt_page_contents=ppt_page_contents,
             first_draft_results=first_draft_results,
             user_ppt_style="绿色简约风",
         )
-        fork_config = agent.update_state(config, origin_state, as_node="inquire_style")
+        fork_config = agent.update_state(
+            config, origin_state, as_node="inquire_style"
+        )
         response = await agent.ainvoke(None, config=fork_config)
         # if response["__interrupt__"]:
         #     # print("Workflow is interrupted, waiting for user input...")
