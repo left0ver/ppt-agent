@@ -315,14 +315,29 @@ def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableCon
             "parsed_ppt_content_files": [],
             "ppt_content_parse_batch_id": None,
         }
-    file_paths = sorted(path for path in ppt_content_dir.iterdir() if path.is_file())
-    if not file_paths:
+    # markdown格式不需要解析,mineru只要解析pdf和docx格式的文件即可
+    need_parsed_file_extensions = [".pdf", ".docx"]
+    markdown_file_extensions = [".markdown", ".md"]
+    need_parse_file_paths = sorted(
+        path
+        for path in ppt_content_dir.iterdir()
+        if path.is_file() and path.suffix in need_parsed_file_extensions
+    )
+    markdown_file_paths = [
+        path
+        for path in ppt_content_dir.iterdir()
+        if path.is_file() and path.suffix in markdown_file_extensions
+    ]
+
+    if len(need_parse_file_paths) <= 0 and len(markdown_file_paths) <= 0:
         return {
             "ppt_content_files_markdown_contents": None,
         }
 
     mineru_client = MinerUBatchClient.from_env()
-    batch_result = mineru_client.batch_parse_local_files(file_paths, parsed_output_dir)
+    batch_result = mineru_client.batch_parse_local_files(
+        need_parse_file_paths, parsed_output_dir
+    )
 
     parsed_files: list[dict[str, Any]] = []
     for item in batch_result["downloads"]:
@@ -344,6 +359,10 @@ def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableCon
     ppt_content_files_markdown_contents = [
         file["markdown_content"] for file in parsed_files
     ]
+    for markdown_file_path in markdown_file_paths:
+        markdown_content = markdown_file_path.read_text(encoding="utf-8")
+        ppt_content_files_markdown_contents.append(markdown_content)
+
     with open(
         f"user_data/{thread_id}/ppt_content_files_markdown_contents.json",
         "w",
@@ -774,7 +793,7 @@ if __name__ == "__main__":
             user_ppt_style="绿色简约风",
         )
         fork_config = agent.update_state(
-            config, origin_state, as_node="parser_ppt_content_files"
+            config, origin_state, as_node="ask_for_ppt_info"
         )
         response = await agent.ainvoke(None, config=fork_config)
         # if response["__interrupt__"]:
