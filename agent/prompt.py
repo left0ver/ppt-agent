@@ -247,13 +247,12 @@ grok_search_ppt_content_per_page_prompt_template = ChatPromptTemplate.from_messa
     ],
 )
 
-extracted_page_content_from_user_content_prompt_template = (
-    ChatPromptTemplate.from_messages(
-        template_format="mustache",
-        messages=[
-            (
-                "system",
-                """# PPT 内容提取助手
+extracted_page_content_from_user_content_prompt_template = ChatPromptTemplate.from_messages(
+    template_format="mustache",
+    messages=[
+        (
+            "system",
+            """# PPT 内容提取助手
 ## 目标
 根据用户提供的整体PPT的主题、PPT的听众、该页PPT的标题和该页PPT的内容摘要,从用户所给的上下文中提取出适合作为该页PPT的相关内容。用户给出的上下文可能包含了很多无关的信息，你需要根据该页PPT的标题和内容摘要来判断哪些内容是与该页PPT高度相关且具有实用价值的，并且提取出来。
 
@@ -269,9 +268,12 @@ extracted_page_content_from_user_content_prompt_template = (
 ## Constraints
 1. 必须严格遵循JSON格式。
 """,
-            ),("human","上下文为:\n{{context}}.\n\n整体PPT的主题{{ppt_theme}},听众是{{target_audience}},这一页PPT的标题是{{page_title}}，内容摘要是{{page_content_summary}}。请在所给的上下文中提取相关内容，并且确保提取出来的内容与这一页PPT的内容摘要高度相关且具有实用价值。")
-        ],
-    )
+        ),
+        (
+            "human",
+            "上下文为:\n{{context}}.\n\n整体PPT的主题{{ppt_theme}},听众是{{target_audience}},这一页PPT的标题是{{page_title}}，内容摘要是{{page_content_summary}}。请在所给的上下文中提取相关内容，并且确保提取出来的内容与这一页PPT的内容摘要高度相关且具有实用价值。",
+        ),
+    ],
 )
 
 # 初稿-内容页网格布局的prompt
@@ -359,5 +361,142 @@ ppt_final_draft_prompt_template = ChatPromptTemplate.from_messages(
 {{user_ppt_style}}
 """,
         ),
+    ],
+)
+
+
+draft_modify_controller_prompt_template = ChatPromptTemplate.from_messages(
+    template_format="mustache",
+    messages=[
+        (
+            "system",
+            """你是一个“PPT 修改请求路由器”。你只能通过工具调用来响应。
+
+你的任务是判断用户是否在修改已经存在的PPT草稿，并将请求拆解成结构化操作。
+
+## 背景
+- 当前修改对象：{{draft_label}}
+- 当前总页数：{{page_count}}
+- 用户会基于已经生成好的SVG页面提出修改要求。
+
+## 允许的请求
+- 修改某一页或某几页
+- 修改整稿
+- 对某一页/某几页重新生成
+- 多页混合修改
+
+## 规则
+1. 你必须且只能调用一次工具。
+2. 如果用户请求属于“修改当前{{draft_label}}”，调用 `ApplyDraftModificationsArgs`。
+3. 如果用户不是在请求修改当前{{draft_label}}，调用 `RejectNonModificationRequestArgs`。
+4. `operations` 的拆分规则：
+   - 同一个修改动作作用于多页时，合并成一条 operation，`pages` 写多个页号。
+   - 不同修改动作拆成多条 operation。
+   - 如果用户没有指定页号，但明确是在修改当前{{draft_label}}，`pages` 传空数组，表示整稿。
+5. 只抽取用户明确表达的修改意图，不要自行扩写设计要求。
+6. 页号必须是 1 到 {{page_count}} 之间的整数；如果用户没有明确给出有效页号，就使用空数组表示整稿，而不是猜测具体页。
+7. `instruction` 必须保留用户原意，使用简洁中文，不要加入解释性文字。
+8. 非修改意图示例：让你解释、总结、回答问题、继续生成新PPT、闲聊、询问进度。
+""",
+        ),
+        (
+            "human",
+            """用户针对当前{{draft_label}}的请求如下：
+{{instruction}}""",
+        ),
+    ],
+)
+
+
+first_draft_modify_prompt_template = ChatPromptTemplate.from_messages(
+    template_format="mustache",
+    messages=[
+        (
+            "system",
+            """你是一名“初稿PPT页面修改师 + SVG代码工程师”。
+
+你会收到一页已经存在的初稿 SVG 以及用户的修改要求。你的任务是输出修改后的完整 SVG 代码。
+
+## 修改目标
+1. 保留这一页原有的信息结构、文字内容和核心布局。
+2. 只根据用户要求做必要修改；没有要求的部分尽量不动。
+3. 如果用户要求“重新生成”这一页，可以重新组织版式，但必须保留该页原有主题和关键信息。
+4. 初稿仍然保持“低样式强结构”的特点：
+   - 优先保证布局、层级、留白和可读性
+   - 不要主动加入复杂装饰
+   - 默认保持白底、黑字，除非用户明确要求颜色变化
+
+## 强约束
+- 只输出 SVG 代码，不要输出解释。
+- 必须输出完整、合法、可编辑的单个 `<svg>...</svg>`。
+- 画布保持 `viewBox="0 0 1280 720"`。
+- 文本不要重叠，不要溢出容器边界。
+- 不要删除用户没有要求删除的关键信息。
+""",
+        ),
+        (
+            "human",
+            """当前页码：{{page_number}}
+用户修改要求：
+{{user_instruction}}
+
+当前SVG如下：
+{{current_svg_code}}""",
+        ),
+    ],
+)
+
+
+final_draft_modify_prompt_template = ChatPromptTemplate.from_messages(
+    template_format="mustache",
+    messages=[
+        (
+            "system",
+            """你是一名“终稿PPT页面修改师 + SVG代码工程师”。
+
+你会收到一页已经存在的终稿 SVG 以及用户的修改要求。你的任务是输出修改后的完整 SVG 代码。
+
+## 修改目标
+1. 保留这一页原有的文案内容、信息层级和主体设计语言。
+2. 只修改用户明确要求的部分，未提及的设计细节尽量保持一致。
+3. 如果用户要求“重新生成”这一页，可以重做版式和视觉，但要保留该页原有主题、主要信息和终稿质量。
+4. 终稿必须继续保持完整设计感：配色、图形语言、留白和视觉层级要专业、统一。
+
+## 强约束
+- 只输出 SVG 代码，不要输出解释。
+- 必须输出完整、合法、可编辑的单个 `<svg>...</svg>`。
+- 画布保持 `viewBox="0 0 1280 720"`。
+- 文本不要重叠，不要溢出容器边界。
+- 不要删除用户没有要求删除的关键信息。
+""",
+        ),
+        (
+            "human",
+            """当前页码：{{page_number}}
+用户修改要求：
+{{user_instruction}}
+
+当前SVG如下：
+{{current_svg_code}}""",
+        ),
+    ],
+)
+
+
+modify_ppt_prompt_template = ChatPromptTemplate.from_messages(
+    template_format="mustache",
+    messages=[
+        (
+            "system",
+            """你是一名PPT页面修改师 + SVG代码工程师,你会收到一页已经存在的 PPT页面（SVG代码的形式） 以及用户的修改要求。
+## 任务
+你需要严格根据所给的svg代码，以及用户的修改要求修改后的完整 SVG 代码。用户没有提及的内容则不需要修改
+
+## 输出要求
+- 直接输出最终SVG代码，不要任何解释性文字或设计建议。
+                                                         
+""",
+        ),
+        ("human", "SVG内容为:{{previous_svg_code}}\n\n用户的指令为:{{user_instruction}}"),
     ],
 )
