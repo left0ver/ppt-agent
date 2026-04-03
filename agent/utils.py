@@ -1,4 +1,5 @@
 import logging
+import re
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
@@ -76,3 +77,14 @@ def verify_svg(svg_string):
         raise InvalidSVGError()
     except ET.ParseError:
         raise InvalidSVGError()
+
+
+def extract_svg_from_response(response) -> str:
+    svg_match = re.search(r"<svg\b[^>]*>[\s\S]*?<\/svg>", response.content)
+    if svg_match:
+        svg_content = svg_match.group(0)
+    else:
+        raise ValueError(
+            f"在LLM的返回中没有找到<svg>标签来包裹的内容，请确保LLM按照要求输出，并且输出的内容包含一个合法的SVG字符串。LLM的原始输出是: {response.content}"
+        )
+    return svg_content

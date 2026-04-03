@@ -84,17 +84,10 @@ async def generate_first_draft_task_with_delay(
 ):
     if delay > 0:
         await asyncio.sleep(index * delay)
-    response = await chain.ainvoke({"page_content": page_content})
-    # 将LLM的输出保存为svg文件
+    svg_content = await chain.ainvoke({"page_content": page_content})
+    # # 将LLM的输出保存为svg文件
     svg_file_path = Path(f"user_data/{thread_id}/first_draft/page_{index + 1}.svg")
-    # 正则表达式提取svg的内容
-    svg_match = re.search(r"<svg\b[^>]*>[\s\S]*?<\/svg>", response.content)
-    if svg_match:
-        svg_content = svg_match.group(0)
-    else:
-        raise ValueError(
-            f"在LLM的返回中没有找到<svg>标签来包裹的内容，请确保LLM按照要求输出，并且输出的内容包含一个合法的SVG字符串。LLM的原始输出是: {response.content}"
-        )
+
     svg_file_path.parent.mkdir(parents=True, exist_ok=True)
     svg_file_path.write_text(svg_content, encoding="utf-8")
 
@@ -115,20 +108,12 @@ async def generate_final_ppt_task_with_delay(
         await asyncio.sleep(index * delay)
 
     final_ppt_path = Path(f"user_data/{thread_id}/final_ppt/page_{index + 1}.svg")
-    response = await chain.ainvoke(
+    svg_content = await chain.ainvoke(
         {
             "first_draft_svg_code": first_draft_result.get("svg_content", ""),
             "user_ppt_style": user_ppt_style or "",
         }
     )
-    # 正则表达式提取svg的内容
-    svg_match = re.search(r"<svg\b[^>]*>[\s\S]*?<\/svg>", response.content)
-    if svg_match:
-        svg_content = svg_match.group(0)
-    else:
-        raise ValueError(
-            f"在LLM的返回中没有找到<svg>标签来包裹的内容，请确保LLM按照要求输出，并且输出的内容包含一个合法的SVG字符串。LLM的原始输出是: {response.content}"
-        )
     final_ppt_path.parent.mkdir(parents=True, exist_ok=True)
     final_ppt_path.write_text(svg_content, encoding="utf-8")
     logger.info(f"第{index + 1}页的终稿已经生成并保存到{final_ppt_path}")

@@ -5,7 +5,16 @@ import os
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional, TypedDict
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    Optional,
+    TypedDict,
+    Union,
+    get_args,
+    get_origin,
+)
 
 import json_repair
 from dotenv import load_dotenv
@@ -16,7 +25,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
 # from gohumanloop.adapters.langgraph_adapter import interrupt, create_resume_command
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -32,28 +41,34 @@ from prompt import (
     ppt_final_draft_prompt_template,
     ppt_first_draft_grid_style_prompt_template,
     ppt_first_draft_guide_page_prompt_template,
+    ppt_first_draft_Top_Bottom_style_prompt_template,
     ppt_outline_prompt_template,
 )
 from pydantic import BaseModel, Field
 from task import (
+    extract_page_content_task_with_delay,
     generate_final_ppt_task_with_delay,
     generate_first_draft_task_with_delay,
     search_page_content_task_with_delay,
-    extract_page_content_task_with_delay,
 )
 from temp import (
     first_draft_results,
     ppt_content_files_markdown_contents,
     ppt_outline,
     ppt_page_contents,
-    web_fetch_results,
     user_content,
+    web_fetch_results,
 )
-from utils import ppt2svg, setup_logging
+from utils import extract_svg_from_response, ppt2svg, setup_logging, verify_svg
 
 load_dotenv()
 setup_logging()
 logger = logging.getLogger(__file__)
+
+
+class LayoutType(Enum):
+    TOP_BOTTOM = "top_bottom"
+    GRID = "grid"
 
 
 class TimeLine(Enum):
@@ -78,10 +93,13 @@ class PPTInfo(BaseModel):
         description="用户的角色，例如软件工程师、学生、产品经理"
     )
     purpose: Optional[str] = Field(description="PPT的目的，例如汇报、演讲、培训")
-    style: Optional[str] = Field(description="PPT的风格，例如商务风、简约风、科技风")
     num_pages: Optional[int] = Field(description="PPT的页数,1—30页", gt=0, le=30)
     theme: Optional[str] = Field(
         description="PPT的主题，例如'dify的介绍', '人工智能的发展趋势', '如何提升工作效率'等"
+    )
+    layout_style: Optional[LayoutType] = Field(
+        default=LayoutType.TOP_BOTTOM,
+        description=f"PPT的布局风格,可选的有{[t.value for t in LayoutType]}",
     )
 
 
@@ -162,23 +180,41 @@ class InputSchema(BaseModel):
     )
 
 
+def get_core_type(field_name: str, model_class):
+    field_annotation = model_class.model_fields[field_name].annotation
+
+    # 检查是否为 Union (Optional 就是一种 Union)
+    if get_origin(field_annotation) is Union:
+        # 获取 Union 内部的所有类型，例如 (int, <class 'NoneType'>)
+        args = get_args(field_annotation)
+        # 过滤掉 NoneType，拿到真实的业务类型
+        core_types = [arg for arg in args if arg is not type(None)]
+        return core_types[0] if core_types else field_annotation
+
+    return field_annotation
+
+
 # node
 def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
-    # PPT的相关信息
-    # TODO: 去掉一些不需要的信息的询问
-    required_data = {
-        "target_audience": {"type": "str", "description": "PPT的目标群体"},
-        "user_role": {
-            "type": "str",
-            "description": "用户的角色，例如软件工程师、学生、产品经理",
-        },
-        "purpose": {"type": "str", "description": "PPT的目的,例如汇报、演讲、培训"},
-        "style": {
-            "type": "str",
-            "description": "PPT的风格，例如商务风、简约风、科技风",
-        },
-        "num_pages": {"type": "int", "description": "PPT的页数,1—30页"},
-    }
+    # 需要收集的用户相关的ppt的信息
+    non_required_fields = ["theme"]
+    required_data = {}
+    for field_name, field_info in PPTInfo.model_fields.items():
+        if field_name in non_required_fields:
+            continue
+        core_type = get_core_type(field_name, PPTInfo)
+        if issubclass(core_type, Enum):
+            required_data[field_name] = {
+                "type": "enum",
+                "description": field_info.description,
+                "options": [e.value for e in core_type],
+            }
+        else:
+            required_data[field_name] = {
+                "type": core_type.__name__,
+                "description": field_info.description,
+            }
+
     while True:
         user_input = interrupt(
             {
@@ -374,7 +410,10 @@ def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableCon
     }
 
 
+# node
 def parser_ppt_content_urls(state: State, runtime: Runtime, config: RunnableConfig):
+    """解析用户所给的ppt内容相关的urls,通过Tavily或者Firecrawl来抓取对应的页面的内容转为markdown的格式"""
+    # TODO: 验证url是否正确
     ppt_content_source_urls = state.ppt_content_source_urls
     if ppt_content_source_urls is None or len(ppt_content_source_urls) <= 0:
         return {}
@@ -428,9 +467,8 @@ def parser_ppt_template(
 
 # node
 def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig):
+    """生成ppt的大纲"""
     thread_id = config["configurable"].get("thread_id")
-    # context =
-    # context_list = state.ppt_content_files_markdown_contents or state.web_fetch_results or None
     if (
         state.ppt_content_files_markdown_contents is not None
         and len(state.ppt_content_files_markdown_contents) > 0
@@ -487,6 +525,7 @@ def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig)
 async def generate_ppt_content_per_page(
     state: State, runtime: Runtime, config: RunnableConfig
 ):
+    """根据ppt的大纲来搜索每一页的内容或者根据用户上传的内容文件来提取出每一页所需的内容"""
     have_ppt_content_files = state.have_ppt_content_files
     thread_id = config["configurable"].get("thread_id")
     # 设置User-Agent来解决被cf拦截的问题
@@ -600,21 +639,38 @@ async def generate_ppt_content_per_page(
 # node
 async def generate_first_draft(state: State, runtime: Runtime, config: RunnableConfig):
     thread_id = config["configurable"].get("thread_id")
-    # 封面结尾页的生成
-    # prompt = PromptTemplate.from_template(prompt_template, template_format="mustache")
 
     generate_first_draft_model = ChatOpenAI(
         model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
         base_url=os.getenv("GEMINI_BASE_URL"),
         api_key=os.getenv("GEMINI_API_KEY"),
     )
+
+    layout_style = state.ppt_info.layout_style or LayoutType.GRID
+    options = [layout.value for layout in LayoutType]
+    match layout_style:
+        case LayoutType.TOP_BOTTOM:
+            prompt_template = ppt_first_draft_Top_Bottom_style_prompt_template
+        case LayoutType.GRID:
+            prompt_template = ppt_first_draft_grid_style_prompt_template
+        case _:
+            raise ValueError(
+                f"不支持的布局风格{layout_style},目前仅支持{options}中的布局风格"
+            )
     content_page_chain = (
-        ppt_first_draft_grid_style_prompt_template | generate_first_draft_model
-    )
+        prompt_template
+        | generate_first_draft_model
+        | RunnableLambda(extract_svg_from_response)
+        | RunnableLambda(verify_svg)
+    ).with_retry()
     cover_page_chain = (
-        ppt_first_draft_guide_page_prompt_template | generate_first_draft_model
-    )
-    ppt_page_contents = state.ppt_page_contents
+        ppt_first_draft_guide_page_prompt_template
+        | generate_first_draft_model
+        | RunnableLambda(extract_svg_from_response)
+        | RunnableLambda(verify_svg)
+    ).with_retry()
+
+    ppt_page_contents = state.ppt_page_contents or []
 
     tasks = []
     for i, ppt_page_content in enumerate(ppt_page_contents):
@@ -662,7 +718,12 @@ async def generate_final_ppt(state: State, runtime: Runtime, config: RunnableCon
         base_url=os.getenv("GEMINI_BASE_URL"),
         api_key=os.getenv("GEMINI_API_KEY"),
     )
-    chain = ppt_final_draft_prompt_template | generate_final_ppt_model
+    chain = (
+        ppt_final_draft_prompt_template
+        | generate_final_ppt_model
+        | RunnableLambda(extract_svg_from_response)
+        | RunnableLambda(verify_svg)
+    )
     first_draft_results = state.first_draft_results
     final_ppt_results = []
     final_ppt_generate_tasks = []
@@ -739,10 +800,6 @@ agent = graph.compile(checkpointer=InMemorySaver())
 
 
 if __name__ == "__main__":
-    # config: RunnableConfig = {"configurable": {"thread_id": "1"}}
-    # response = agent.invoke({"theme": "AI在企业运营中的落地实践"}, config=config)
-    # print(response)
-
     # while response["__interrupt__"]:
     # if response["__interrupt__"]:
     # user_input = {
@@ -763,7 +820,9 @@ if __name__ == "__main__":
             save_path = Path(graph_name)
             save_path.write_bytes(graph_png)
             print(f"Graph image saved to: {save_path}")
-
+        # config: RunnableConfig = {"configurable": {"thread_id": "1"}}
+        # response = agent.invoke({"theme": "AI在企业运营中的落地实践"}, config=config)
+        # print(response)
         """"
         test search_ppt_contents
         """
@@ -774,7 +833,7 @@ if __name__ == "__main__":
                 target_audience="导师以及同学",
                 user_role="学生",
                 purpose="汇报",
-                style="学术风",
+                layout_style=LayoutType.TOP_BOTTOM,
                 num_pages=10,
                 theme="DeekSeek R1的介绍",
             ),
@@ -792,14 +851,12 @@ if __name__ == "__main__":
             first_draft_results=first_draft_results,
             user_ppt_style="绿色简约风",
         )
-        fork_config = agent.update_state(
-            config, origin_state, as_node="ask_for_ppt_info"
-        )
+        fork_config = agent.update_state(config, origin_state, as_node="generate_ppt_content_per_page")
         response = await agent.ainvoke(None, config=fork_config)
         # if response["__interrupt__"]:
         #     # print("Workflow is interrupted, waiting for user input...")
-        #     response = agent.invoke(Command(resume="绿色简约风"), config=config)
-        # # response = await agent.ainvoke()
+        #     response = agent.ainvoke(Command(resume="绿色简约风"), config=fork_config)
+        # response = await agent.ainvoke()
         print(response)
 
     asyncio.run(main())
