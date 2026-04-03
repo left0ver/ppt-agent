@@ -493,7 +493,7 @@ modify_ppt_prompt_template = ChatPromptTemplate.from_messages(
 你需要严格根据所给的svg代码，以及用户的修改要求修改后的完整 SVG 代码。用户没有提及的内容则不需要修改
 
 ## 输出要求
-- 直接输出最终SVG代码，不要任何解释性文字或设计建议。
+- 直接输出最终的SVG代码，"请以绝对的纯文本（Plain text）格式生成回复，不需要使用字符转义来替代某些字符，不要输出任何解释性文字或设计建议。
                                                          
 """,
         ),

@@ -1,6 +1,7 @@
 import logging
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pymupdf
@@ -55,3 +56,23 @@ def setup_logging():
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+
+class InvalidSVGError(Exception):
+    """当遇到不合法的SVG时抛出此异常"""
+
+    def __init__(self, message="非法的 SVG 内容"):
+        self.message = message
+        # 调用父类的初始化方法，将基本错误信息传进去
+        super().__init__(f"{message}")
+
+
+def verify_svg(svg_string):
+    try:
+        # 尝试解析XML
+        root = ET.fromstring(svg_string)
+        if root.tag.lower().endswith("svg"):
+            return svg_string
+        raise InvalidSVGError()
+    except ET.ParseError:
+        raise InvalidSVGError()
