@@ -17,6 +17,7 @@ from typing import (
 )
 
 import json_repair
+from constant import InterruptType, LayoutType, TimeLine
 from dotenv import load_dotenv
 from extractors import ExtractorFactory
 from langchain.messages import AnyMessage
@@ -35,6 +36,7 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
 from mineru_parser_batch import MinerUBatchClient
 from prompt import (
+    extract_ppt_info_prompt_template,
     extracted_page_content_from_user_content_prompt_template,
     grok_search_ppt_content_per_page_prompt_template,
     grok_search_prompt_template,
@@ -66,33 +68,12 @@ setup_logging()
 logger = logging.getLogger(__file__)
 
 
-class LayoutType(Enum):
-    TOP_BOTTOM = "top_bottom"
-    GRID = "grid"
-
-
-class TimeLine(Enum):
-    NO_START = "no_start"
-    INFO_GATHERED = "info_gathered"  # 信息收集完成
-    OUTLINE_GENERATED = "outline_generated"
-    SKETCH_GENERATED = "sketch_generated"
-    COMPLETED = "completed"
-
-
-class InterruptType(Enum):
-    FORM = "form"
-    CONFIRMATION = "confirmation"
-    UPLOAD_PPT_CONTENT_FILES = "upload_ppt_content_files"
-    UPLOAD_PPT_TEMPLATE = "upload_ppt_template"
-    INPUT = "input"
-
-
 class PPTInfo(BaseModel):
     target_audience: Optional[str] = Field(description="PPT的目标群体")
     user_role: Optional[str] = Field(
         description="用户的角色，例如软件工程师、学生、产品经理"
     )
-    purpose: Optional[str] = Field(description="PPT的目的，例如汇报、演讲、培训")
+    # purpose: Optional[str] = Field(description="PPT的目的，例如汇报、演讲、培训")
     num_pages: Optional[int] = Field(description="PPT的页数,1—30页", gt=0, le=30)
     theme: Optional[str] = Field(
         description="PPT的主题，例如'dify的介绍', '人工智能的发展趋势', '如何提升工作效率'等"
@@ -175,9 +156,7 @@ class State(BaseModel):
 
 
 class InputSchema(BaseModel):
-    theme: str = Field(
-        description="PPT的主题，例如'dify的介绍', '人工智能的发展趋势', '如何提升工作效率'等"
-    )
+    ppt_requirement: str = Field(description="用户的ppt的请求")
 
 
 def get_core_type(field_name: str, model_class):
@@ -196,63 +175,20 @@ def get_core_type(field_name: str, model_class):
 
 # node
 def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
-    # 需要收集的用户相关的ppt的信息
-    non_required_fields = ["theme"]
-    required_data = {}
-    for field_name, field_info in PPTInfo.model_fields.items():
-        if field_name in non_required_fields:
-            continue
-        core_type = get_core_type(field_name, PPTInfo)
-        if issubclass(core_type, Enum):
-            required_data[field_name] = {
-                "type": "enum",
-                "description": field_info.description,
-                "options": [e.value for e in core_type],
-            }
-        else:
-            required_data[field_name] = {
-                "type": core_type.__name__,
-                "description": field_info.description,
-            }
+    llm = ChatOpenAI(
+        model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
+        base_url=os.getenv("GEMINI_BASE_URL"),
+        api_key=os.getenv("GEMINI_API_KEY"),
+    )
+    json_parser = JsonOutputParser()
+    chain = extract_ppt_info_prompt_template | llm | json_parser
 
-    while True:
-        user_input = interrupt(
-            {
-                "title": "请你输入以下信息来帮助我更好地理解你的需求：",
-                "type": InterruptType.FORM,
-                "form_key": "ppt_info",
-                "required_data": required_data,
-            }
-        )
-        if isinstance(user_input, dict):
-            target_audience = user_input.get("target_audience", None)
-            if target_audience is not None:
-                required_data.pop("target_audience")
+    ppt_info = chain.invoke({"user_input": input.ppt_requirement})
 
-            user_role = user_input.get("user_role", None)
-            if user_role is not None:
-                required_data.pop("user_role")
-            purpose = user_input.get("purpose", None)
-            if purpose is not None:
-                required_data.pop("purpose")
-
-            style = user_input.get("style", None)
-            if style is not None:
-                required_data.pop("style")
-            num_pages = user_input.get("num_pages", None)
-            if num_pages is not None and 1 <= num_pages <= 30:
-                required_data.pop("num_pages")
-        if len(required_data) == 0:
-            ppt_info = PPTInfo(
-                target_audience=target_audience,
-                user_role=user_role,
-                purpose=purpose,
-                style=style,
-                num_pages=num_pages,
-                theme=input.theme,
-            )
-            break
-
+    # 前端让用户进行编辑，前端需要保证所有的信息不为None
+    ppt_info = interrupt(
+        {"title": "ppt的相关信息", "type": InterruptType.EDIT, "values": ppt_info}
+    )
     ppt_content_source_from_user = interrupt(
         {
             "title": "你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过",
@@ -315,7 +251,6 @@ def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
             "theme": ppt_info.theme,
             "target_audience": ppt_info.target_audience,
             "user_role": ppt_info.user_role,
-            "purpose": ppt_info.purpose,
         }
     )
     json_parser = JsonOutputParser()
@@ -496,7 +431,6 @@ def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig)
         {
             "theme": state.ppt_info.theme,
             "user_role": state.ppt_info.user_role,
-            "purpose": state.ppt_info.purpose,
             "target_audience": state.ppt_info.target_audience,
             "num_pages": state.ppt_info.num_pages,
             "context": context,
@@ -810,8 +744,6 @@ if __name__ == "__main__":
     #     "num_pages": 80,
     # }
 
-    # response = agent.invoke(Command(resume=user_input), config=config)
-    # print(response)
     async def main():
         save_graph = True
         graph_name = "ppt_generation_agent_graph.png"
@@ -827,36 +759,44 @@ if __name__ == "__main__":
         test search_ppt_contents
         """
         config: RunnableConfig = {"configurable": {"thread_id": "zwc_test"}}
-
-        origin_state = State(
-            ppt_info=PPTInfo(
-                target_audience="导师以及同学",
-                user_role="学生",
-                purpose="汇报",
-                layout_style=LayoutType.TOP_BOTTOM,
-                num_pages=10,
-                theme="DeekSeek R1的介绍",
+        response = agent.invoke(
+            InputSchema(
+                ppt_requirement="我是一个学生，我想给导师做一个有关deepseek的论文的汇报,排版使用上下结构的"
             ),
-            messages=[],
-            ppt_template_path="user_data/zwc_test/template/template.pdf",
-            current_timeline=TimeLine.INFO_GATHERED,
-            have_ppt_content_files=True,
-            ppt_content_source_urls=["https://ghostty.org/docs/install/binary"],
-            ppt_content_files_markdown_contents=ppt_content_files_markdown_contents,
-            have_ppt_template=False,
-            web_fetch_results=web_fetch_results,
-            ppt_outline=ppt_outline,
-            user_content=user_content,
-            ppt_page_contents=ppt_page_contents,
-            first_draft_results=first_draft_results,
-            user_ppt_style="绿色简约风",
+            config=config,
         )
-        fork_config = agent.update_state(config, origin_state, as_node="generate_ppt_content_per_page")
-        response = await agent.ainvoke(None, config=fork_config)
-        # if response["__interrupt__"]:
-        #     # print("Workflow is interrupted, waiting for user input...")
-        #     response = agent.ainvoke(Command(resume="绿色简约风"), config=fork_config)
-        # response = await agent.ainvoke()
         print(response)
+        # origin_state = State(
+        #     ppt_info=PPTInfo(
+        #         target_audience="导师以及同学",
+        #         user_role="学生",
+        #         # purpose="汇报",
+        #         layout_style=LayoutType.TOP_BOTTOM,
+        #         num_pages=10,
+        #         theme="DeekSeek R1的介绍",
+        #     ),
+        #     messages=[],
+        #     ppt_template_path="user_data/zwc_test/template/template.pdf",
+        #     current_timeline=TimeLine.INFO_GATHERED,
+        #     have_ppt_content_files=True,
+        #     ppt_content_source_urls=["https://ghostty.org/docs/install/binary"],
+        #     ppt_content_files_markdown_contents=ppt_content_files_markdown_contents,
+        #     have_ppt_template=False,
+        #     web_fetch_results=web_fetch_results,
+        #     ppt_outline=ppt_outline,
+        #     user_content=user_content,
+        #     ppt_page_contents=ppt_page_contents,
+        #     first_draft_results=first_draft_results,
+        #     user_ppt_style="绿色简约风",
+        # )
+        # fork_config = agent.update_state(
+        #     config, origin_state, as_node="generate_ppt_content_per_page"
+        # )
+        # response = await agent.ainvoke(None, config=fork_config)
+        # # if response["__interrupt__"]:
+        # #     # print("Workflow is interrupted, waiting for user input...")
+        # #     response = agent.ainvoke(Command(resume="绿色简约风"), config=fork_config)
+        # # response = await agent.ainvoke()
+        # print(response)
 
     asyncio.run(main())
