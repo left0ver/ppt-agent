@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type * as React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -89,8 +89,19 @@ vi.mock('@ant-design/x', async () => {
 
 vi.mock('antd', async () => {
   const passthrough = (displayName: string) => {
-    const Component = ({ children }: React.PropsWithChildren<Record<string, unknown>>) => (
-      <div data-component={displayName}>{children}</div>
+    const Component = ({
+      children,
+      className,
+      onClick,
+      style,
+    }: React.PropsWithChildren<{
+      className?: string
+      onClick?: () => void
+      style?: React.CSSProperties
+    }>) => (
+      <div data-component={displayName} className={className} onClick={onClick} style={style}>
+        {children}
+      </div>
     )
     Component.displayName = displayName
     return Component
@@ -268,6 +279,14 @@ vi.mock('antd', async () => {
 
 const { default: App } = await import('./App')
 
+function deferredResponse() {
+  let resolve!: (value: Response) => void
+  const promise = new Promise<Response>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
 describe('App session bootstrap', () => {
   beforeEach(() => {
     vi.stubGlobal('matchMedia', vi.fn().mockImplementation(() => ({
@@ -283,6 +302,7 @@ describe('App session bootstrap', () => {
   })
 
   afterEach(() => {
+    cleanup()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -367,5 +387,130 @@ describe('App session bootstrap', () => {
       expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8000/api/sessions/session-newest', expect.anything())
       expect(fetchMock).not.toHaveBeenCalledWith('http://127.0.0.1:8000/api/sessions/session-older', expect.anything())
     })
+  })
+
+  it('clears stale session detail from the active view when switching sessions', async () => {
+    const betaSessionDetail = deferredResponse()
+
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+
+      if (url.endsWith('/api/sessions')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+            {
+              id: 'session-b',
+              title: 'Beta Session',
+              status: 'completed',
+              stage: 'completed',
+              created_at: '2026-04-08T09:00:00Z',
+              updated_at: '2026-04-08T10:00:00Z',
+            },
+            {
+              id: 'session-a',
+              title: 'Alpha Session',
+              status: 'interrupted',
+              stage: 'awaiting_ppt_info',
+              created_at: '2026-04-08T08:00:00Z',
+              updated_at: '2026-04-08T11:00:00Z',
+            },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      }
+
+      if (url.endsWith('/api/sessions/session-b')) {
+        return betaSessionDetail.promise
+      }
+
+      if (url.endsWith('/api/sessions/session-a')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              session: {
+                id: 'session-a',
+                title: 'Alpha Session',
+                status: 'interrupted',
+                stage: 'awaiting_ppt_info',
+                created_at: '2026-04-08T08:00:00Z',
+                updated_at: '2026-04-08T10:00:00Z',
+              },
+              messages: [],
+              pending_interrupt: {
+                id: 'interrupt-a',
+                session_id: 'session-a',
+                interrupt_type: 'ppt_info',
+                title: 'Alpha Interrupt',
+                payload: {
+                  target_audience: '导师',
+                  user_role: '学生',
+                  num_pages: 10,
+                  theme: 'Alpha Theme',
+                  layout_style: 'top_bottom',
+                },
+                status: 'pending',
+                message_id: 'message-a',
+                created_at: '2026-04-08T10:00:00Z',
+                resolved_at: null,
+              },
+              preview: {
+                first_draft_results: [],
+                final_ppt_results: [],
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8000/api/sessions', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8000/api/sessions/session-a', expect.anything())
+    })
+
+    expect(await screen.findByText(/Alpha Interrupt/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByText('Beta Session')[0])
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8000/api/sessions/session-b', expect.anything())
+    })
+
+    expect(screen.queryByText(/Alpha Interrupt/)).not.toBeInTheDocument()
+    expect(screen.queryByText('确认 PPT 基本信息')).not.toBeInTheDocument()
+
+    betaSessionDetail.resolve(
+      new Response(
+        JSON.stringify({
+          session: {
+            id: 'session-b',
+            title: 'Beta Session',
+            status: 'completed',
+            stage: 'completed',
+            created_at: '2026-04-08T09:00:00Z',
+            updated_at: '2026-04-08T10:00:00Z',
+          },
+          messages: [],
+          pending_interrupt: null,
+          preview: {
+            first_draft_results: [],
+            final_ppt_results: [],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    expect(await screen.findByText('输出结果')).toBeInTheDocument()
+    expect(screen.queryByText(/Alpha Interrupt/)).not.toBeInTheDocument()
   })
 })

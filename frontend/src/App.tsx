@@ -194,8 +194,11 @@ function App() {
   const [zoomOpen, setZoomOpen] = useState(false)
   const [pptInfoForm] = Form.useForm<PptInfoDraft>()
 
-  const activeSession = sessionDetail?.session ?? sessions.find((item) => item.id === activeSessionId) ?? null
-  const preview = sessionDetail?.preview ?? emptyPreview
+  const activeSessionDetail =
+    sessionDetail?.session.id === activeSessionId ? sessionDetail : null
+  const activeSession =
+    activeSessionDetail?.session ?? sessions.find((item) => item.id === activeSessionId) ?? null
+  const preview = activeSessionDetail?.preview ?? emptyPreview
   const firstDraftCount = preview.first_draft_results.length
   const finalDraftCount = preview.final_ppt_results.length
   const previewList =
@@ -203,7 +206,7 @@ function App() {
   const canModifyFirstDraft = firstDraftCount > 0
   const canModifyFinalDraft = finalDraftCount > 0
   const availableModifyType = canModifyFinalDraft ? '终稿' : '初稿'
-  const errorMessage = extractErrorMessage(sessionDetail)
+  const errorMessage = extractErrorMessage(activeSessionDetail)
   const stepIndex = stageToStepIndex(
     activeSession?.stage ?? 'idle',
     firstDraftCount > 0,
@@ -212,7 +215,7 @@ function App() {
 
   const bubbleItems = useMemo(
     () =>
-      (sessionDetail?.messages ?? [])
+      (activeSessionDetail?.messages ?? [])
         .map((item) => {
           const content = getMessageText(item)
           if (!content) return null
@@ -224,7 +227,7 @@ function App() {
           }
         })
         .filter((item): item is NonNullable<typeof item> => item !== null),
-    [sessionDetail?.messages],
+    [activeSessionDetail?.messages],
   )
 
   const selectedPreview = useMemo(
@@ -291,6 +294,7 @@ function App() {
     }
 
     let cancelled = false
+    setSessionDetail(null)
     setLoadingDetail(true)
 
     void getSessionDetail(activeSessionId)
@@ -345,7 +349,7 @@ function App() {
   }, [activeSessionId, pptInfoForm])
 
   useEffect(() => {
-    const payload = sessionDetail?.pending_interrupt?.payload
+    const payload = activeSessionDetail?.pending_interrupt?.payload
     if (!payload || activeSession?.stage !== 'awaiting_ppt_info' || typeof payload !== 'object') {
       return
     }
@@ -366,7 +370,7 @@ function App() {
 
     setPptInfoDraft(nextDraft)
     pptInfoForm.setFieldsValue(nextDraft)
-  }, [activeSession?.stage, pptInfoForm, sessionDetail?.pending_interrupt?.payload])
+  }, [activeSession?.stage, activeSessionDetail?.pending_interrupt?.payload, pptInfoForm])
 
   useEffect(() => {
     if (finalDraftCount > 0) {
@@ -774,7 +778,7 @@ function App() {
   const renderMainPanel = () => {
     if (loadingSessions && sessions.length === 0) return renderRunningPanel()
     if (!activeSession) return renderEmptyPanel()
-    if (loadingDetail && !sessionDetail) return renderRunningPanel()
+    if (loadingDetail && !activeSessionDetail) return renderRunningPanel()
     if (activeSession.status === 'running') return renderRunningPanel()
     if (activeSession.stage === 'awaiting_ppt_info') return renderPptInfoPanel()
     if (activeSession.stage === 'awaiting_content_sources') return renderContentPanel()
@@ -896,12 +900,12 @@ function App() {
                 }
               />
             </div>
-            {sessionDetail?.pending_interrupt ? (
+            {activeSessionDetail?.pending_interrupt ? (
               <Alert
                 style={{ marginBottom: 16 }}
                 type="info"
                 showIcon
-                message={sessionDetail.pending_interrupt.title}
+                message={activeSessionDetail.pending_interrupt.title}
                 description="当前会话存在待处理的中断，下面的表单会根据阶段提交结构化响应。"
               />
             ) : null}
