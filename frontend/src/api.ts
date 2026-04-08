@@ -1,22 +1,17 @@
+import type {
+  PreviewResult,
+  SessionDetail,
+  SessionMessageInput,
+  SessionPreview,
+  SessionStage,
+  SessionStatus,
+  SessionSummary,
+} from './types'
+
 const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
-  'http://127.0.0.1:8000'
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://127.0.0.1:8000'
 
-export type SessionStatus = 'idle' | 'running' | 'interrupted' | 'completed' | 'failed'
-
-export type Stage =
-  | 'idle'
-  | 'starting'
-  | 'awaiting_ppt_info'
-  | 'awaiting_content_sources'
-  | 'awaiting_template'
-  | 'generating_outline'
-  | 'generating_final_ppt'
-  | 'awaiting_final_style'
-  | 'completed'
-  | 'failed'
-  | 'modifying_page'
-  | string
+export type { PreviewResult, SessionDetail, SessionPreview, SessionStage, SessionStatus, SessionSummary }
 
 export interface InterruptView {
   type: string
@@ -24,27 +19,12 @@ export interface InterruptView {
   payload: unknown
 }
 
-export interface PreviewResult {
-  page: number
-  svg_content?: string | null
-  svg_url: string
-  file_path: string
-}
-
-export interface SessionData {
-  ppt_outline?: unknown
-  ppt_page_contents?: unknown[]
-  ppt_content_files_markdown_contents?: string[]
-  first_draft_results?: PreviewResult[]
-  final_ppt_results?: PreviewResult[]
-  response_content?: string
-  new_svg_list?: Array<{ page: number; new_svg_content: string }>
-}
+export interface SessionData extends SessionPreview {}
 
 export interface ApiResponse {
   thread_id: string
   status: SessionStatus
-  stage: Stage
+  stage: SessionStage
   interrupt: InterruptView | null
   data: SessionData | null
   error: { message: string } | null
@@ -77,10 +57,54 @@ export function getApiBaseUrl(): string {
   return API_BASE_URL
 }
 
-export async function createSession(): Promise<{ thread_id: string }> {
+export async function createSession(): Promise<SessionSummary> {
   return request('/api/sessions', { method: 'POST' })
 }
 
+export async function listSessions(): Promise<SessionSummary[]> {
+  return request('/api/sessions')
+}
+
+export async function getSessionDetail(sessionId: string): Promise<SessionDetail> {
+  return request(`/api/sessions/${sessionId}`)
+}
+
+export async function renameSession(sessionId: string, title: string): Promise<SessionSummary> {
+  return request(`/api/sessions/${sessionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  })
+}
+
+export async function sendSessionMessage(
+  sessionId: string,
+  input: SessionMessageInput,
+): Promise<SessionDetail> {
+  return request(`/api/sessions/${sessionId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function uploadContentFiles(sessionId: string, files: File[]): Promise<void> {
+  const formData = new FormData()
+  files.forEach((file) => formData.append('files', file))
+  await request(`/api/sessions/${sessionId}/attachments/content-files`, {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+export async function uploadTemplate(sessionId: string, file: File): Promise<void> {
+  const formData = new FormData()
+  formData.append('file', file)
+  await request(`/api/sessions/${sessionId}/attachments/template`, {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+// Legacy thread-centric helpers remain available for unfinished follow-up tasks.
 export async function startPpt(thread_id: string, ppt_requirement: string): Promise<ApiResponse> {
   return request('/api/ppt/start', {
     method: 'POST',
@@ -104,13 +128,6 @@ export async function resumePptInfo(
   })
 }
 
-export async function uploadContentFiles(thread_id: string, files: File[]): Promise<void> {
-  const formData = new FormData()
-  formData.append('thread_id', thread_id)
-  files.forEach((file) => formData.append('files', file))
-  await request('/api/ppt/content-files', { method: 'POST', body: formData })
-}
-
 export async function resumeContentSources(
   thread_id: string,
   have_ppt_content_files: boolean,
@@ -120,13 +137,6 @@ export async function resumeContentSources(
     method: 'POST',
     body: JSON.stringify({ thread_id, have_ppt_content_files, ppt_content_source_urls }),
   })
-}
-
-export async function uploadTemplate(thread_id: string, file: File): Promise<void> {
-  const formData = new FormData()
-  formData.append('thread_id', thread_id)
-  formData.append('file', file)
-  await request('/api/ppt/template', { method: 'POST', body: formData })
 }
 
 export async function resumeTemplate(

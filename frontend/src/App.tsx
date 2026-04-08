@@ -43,32 +43,28 @@ import './App.css'
 import {
   createSession,
   getApiBaseUrl,
-  getStatus,
+  getSessionDetail,
+  listSessions,
   modifyPage,
-  resumeContentSources,
-  resumeFinalStyle,
-  resumePptInfo,
-  resumeTemplate,
-  startPpt,
-  type ApiResponse,
-  type PreviewResult,
-  type SessionData,
+  sendSessionMessage,
   uploadContentFiles,
   uploadTemplate,
 } from './api'
 import { exportSlidesToPptx } from './pptExport'
+import type {
+  PreviewResult,
+  SessionDetail,
+  SessionMessage,
+  SessionMessageInput,
+  SessionPreview,
+  SessionSummary,
+} from './types'
 
 const { Header, Sider, Content } = Layout
 const { Dragger } = Upload
 const { Paragraph, Text, Title } = Typography
 
 type UploadChangeParam = Parameters<GetProp<typeof Upload, 'onChange'>>[0]
-
-type Message = {
-  role: 'ai' | 'user'
-  content: string
-  key: string
-}
 
 type PptInfoDraft = {
   target_audience: string
@@ -94,6 +90,19 @@ const stepItems = [
   { key: 'final', label: '终稿完成' },
 ]
 
+const emptyPreview: SessionPreview = {
+  first_draft_results: [],
+  final_ppt_results: [],
+}
+
+const defaultPptInfoDraft: PptInfoDraft = {
+  target_audience: '',
+  user_role: '',
+  num_pages: 10,
+  theme: '',
+  layout_style: 'top_bottom',
+}
+
 const stageToStepIndex = (stage: string, hasFirstDraft: boolean, hasFinalDraft: boolean) => {
   if (hasFinalDraft || stage === 'completed') return 6
   if (stage === 'awaiting_final_style') return 5
@@ -104,31 +113,77 @@ const stageToStepIndex = (stage: string, hasFirstDraft: boolean, hasFinalDraft: 
   return 0
 }
 
-const emptyData: SessionData = {
-  first_draft_results: [],
-  final_ppt_results: [],
-  ppt_page_contents: [],
+function sortSessionsByUpdatedAt(items: SessionSummary[]): SessionSummary[] {
+  return [...items].sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+}
+
+function upsertSessionSummary(items: SessionSummary[], next: SessionSummary): SessionSummary[] {
+  const filtered = items.filter((item) => item.id !== next.id)
+  return sortSessionsByUpdatedAt([next, ...filtered])
+}
+
+function getMessageText(message: SessionMessage): string {
+  if (typeof message.content === 'string' && message.content.trim()) {
+    return message.content
+  }
+
+  if (message.type === 'interrupt' && message.payload && typeof message.payload === 'object') {
+    const title = (message.payload as { title?: unknown }).title
+    if (typeof title === 'string' && title.trim()) {
+      return title
+    }
+  }
+
+  if (message.type === 'error') {
+    const payloadMessage =
+      message.payload && typeof message.payload === 'object'
+        ? (message.payload as { message?: unknown }).message
+        : null
+    if (typeof payloadMessage === 'string' && payloadMessage.trim()) {
+      return `执行失败：${payloadMessage}`
+    }
+    return '执行失败'
+  }
+
+  if (message.type === 'status') {
+    return '状态已更新'
+  }
+
+  if (message.type === 'interrupt_response') {
+    return '已提交确认信息'
+  }
+
+  return ''
+}
+
+function extractErrorMessage(detail: SessionDetail | null): string | null {
+  if (!detail) return null
+  const latestError = [...detail.messages].reverse().find((message) => message.type === 'error')
+  if (!latestError) return null
+  if (typeof latestError.content === 'string' && latestError.content.trim()) {
+    return latestError.content
+  }
+  const payloadMessage =
+    latestError.payload && typeof latestError.payload === 'object'
+      ? (latestError.payload as { message?: unknown }).message
+      : null
+  return typeof payloadMessage === 'string' && payloadMessage.trim() ? payloadMessage : '未知错误'
 }
 
 function App() {
   const { message } = AntApp.useApp()
-  const [threadId, setThreadId] = useState('')
-  const [session, setSession] = useState<ApiResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null)
+  const [loadingSessions, setLoadingSessions] = useState(true)
+  const [loadingDetail, setLoadingDetail] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
   const [requirement, setRequirement] = useState('')
-  const [pptInfoDraft, setPptInfoDraft] = useState<PptInfoDraft>({
-    target_audience: '',
-    user_role: '',
-    num_pages: 10,
-    theme: '',
-    layout_style: 'top_bottom' as 'top_bottom' | 'grid',
-  })
+  const [pptInfoDraft, setPptInfoDraft] = useState<PptInfoDraft>(defaultPptInfoDraft)
   const [contentFiles, setContentFiles] = useState<File[]>([])
   const [contentUrls, setContentUrls] = useState([''])
   const [templateFile, setTemplateFile] = useState<File | null>(null)
   const [finalStyle, setFinalStyle] = useState('')
-  const [messages, setMessages] = useState<Message[]>([])
   const [modifyDrawerOpen, setModifyDrawerOpen] = useState(false)
   const [previewType, setPreviewType] = useState<'first_draft' | 'final_ppt'>('first_draft')
   const [selectedPage, setSelectedPage] = useState(1)
@@ -139,205 +194,43 @@ function App() {
   const [zoomOpen, setZoomOpen] = useState(false)
   const [pptInfoForm] = Form.useForm<PptInfoDraft>()
 
-  useEffect(() => {
-    const bootstrap = async () => {
-      try {
-        const result = await createSession()
-        setThreadId(result.thread_id)
-      } finally {
-        setLoading(false)
-      }
-    }
-    void bootstrap()
-  }, [])
-
-  useEffect(() => {
-    if (!threadId) return
-    const timer = window.setInterval(() => {
-      void getStatus(threadId)
-        .then((result) => setSession((current) => result ?? current))
-        .catch(() => undefined)
-    }, 10000)
-    return () => window.clearInterval(timer)
-  }, [threadId])
-
-  useEffect(() => {
-    if (!session?.interrupt?.payload || session.stage !== 'awaiting_ppt_info') return
-    const payload = session.interrupt.payload as Partial<typeof pptInfoDraft>
-    setPptInfoDraft((current) => {
-      const nextDraft = {
-        ...current,
-        ...payload,
-        layout_style:
-          payload.layout_style === 'grid' || payload.layout_style === 'top_bottom'
-            ? payload.layout_style
-            : current.layout_style,
-        num_pages: typeof payload.num_pages === 'number' ? payload.num_pages : current.num_pages,
-      }
-      pptInfoForm.setFieldsValue(nextDraft)
-      return nextDraft
-    })
-  }, [session?.interrupt, session?.stage])
-
-  useEffect(() => {
-    const hasFinalDraft = (session?.data?.final_ppt_results?.length ?? 0) > 0
-    const hasFirstDraft = (session?.data?.first_draft_results?.length ?? 0) > 0
-    if (hasFinalDraft) {
-      setPreviewType('final_ppt')
-      setModifyType('终稿')
-    } else if (hasFirstDraft) {
-      setPreviewType('first_draft')
-      setModifyType('初稿')
-    }
-  }, [session?.data?.first_draft_results, session?.data?.final_ppt_results])
-
-  const data = session?.data ?? emptyData
-  const previewList = previewType === 'final_ppt' ? data.final_ppt_results ?? [] : data.first_draft_results ?? []
-  const firstDraftCount = data.first_draft_results?.length ?? 0
-  const finalDraftCount = data.final_ppt_results?.length ?? 0
+  const activeSession = sessionDetail?.session ?? sessions.find((item) => item.id === activeSessionId) ?? null
+  const preview = sessionDetail?.preview ?? emptyPreview
+  const firstDraftCount = preview.first_draft_results.length
+  const finalDraftCount = preview.final_ppt_results.length
+  const previewList =
+    previewType === 'final_ppt' ? preview.final_ppt_results : preview.first_draft_results
   const canModifyFirstDraft = firstDraftCount > 0
   const canModifyFinalDraft = finalDraftCount > 0
   const availableModifyType = canModifyFinalDraft ? '终稿' : '初稿'
+  const errorMessage = extractErrorMessage(sessionDetail)
+  const stepIndex = stageToStepIndex(
+    activeSession?.stage ?? 'idle',
+    firstDraftCount > 0,
+    finalDraftCount > 0,
+  )
 
-  useEffect(() => {
-    if (previewList.length === 0) return
-    if (!previewList.some((item) => item.page === selectedPage)) {
-      setSelectedPage(previewList[0].page)
-    }
-  }, [previewList, selectedPage])
-
-  useEffect(() => {
-    if (selectedPage > 0) {
-      setSelectedModifyPages((current) => (current.length > 0 ? current : [selectedPage]))
-    }
-  }, [selectedPage])
-
-  useEffect(() => {
-    setModifyType(availableModifyType)
-  }, [availableModifyType])
-
-  useEffect(() => {
-    const pages = (modifyType === '终稿' ? data.final_ppt_results : data.first_draft_results)?.map((item) => item.page) ?? []
-    setSelectedModifyPages((current) => {
-      const filtered = current.filter((page) => pages.includes(page))
-      if (filtered.length > 0) return filtered
-      return pages.includes(selectedPage) ? [selectedPage] : pages.slice(0, 1)
-    })
-  }, [modifyType, data.final_ppt_results, data.first_draft_results, selectedPage])
+  const bubbleItems = useMemo(
+    () =>
+      (sessionDetail?.messages ?? [])
+        .map((item) => {
+          const content = getMessageText(item)
+          if (!content) return null
+          return {
+            key: item.id,
+            content,
+            placement: item.role === 'user' ? ('end' as const) : ('start' as const),
+            avatar: item.role === 'user' ? { children: 'U' } : { children: 'AI' },
+          }
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null),
+    [sessionDetail?.messages],
+  )
 
   const selectedPreview = useMemo(
     () => previewList.find((item) => item.page === selectedPage) ?? previewList[0] ?? null,
     [previewList, selectedPage],
   )
-
-  const stepIndex = stageToStepIndex(
-    session?.stage ?? 'idle',
-    firstDraftCount > 0,
-    finalDraftCount > 0,
-  )
-
-  const appendMessage = (role: Message['role'], content: string) => {
-    setMessages((current) => [...current, { role, content, key: `${Date.now()}-${current.length}` }])
-  }
-
-  const applyResponse = (response: ApiResponse) => {
-    setSession(response)
-    if (response.error?.message) {
-      appendMessage('ai', `执行失败：${response.error.message}`)
-      void message.error(response.error.message)
-      return
-    }
-    if (response.status === 'interrupted' && response.interrupt) {
-      appendMessage('ai', response.interrupt.title)
-      return
-    }
-    if (response.status === 'completed') {
-      appendMessage('ai', '当前阶段已完成，预览结果已更新。')
-    }
-  }
-
-  const withAction = async (action: () => Promise<ApiResponse>) => {
-    setActionLoading(true)
-    try {
-      const response = await action()
-      applyResponse(response)
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '请求失败'
-      appendMessage('ai', errorMessage)
-      void message.error(errorMessage)
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
-  const handleStart = async () => {
-    if (!threadId || !requirement.trim()) return
-    appendMessage('user', requirement.trim())
-    await withAction(() => startPpt(threadId, requirement.trim()))
-    setRequirement('')
-  }
-
-  const handleSubmitPptInfo = async () => {
-    const values = await pptInfoForm.validateFields()
-    setPptInfoDraft(values)
-    appendMessage('user', `已确认 PPT 信息：${values.theme}`)
-    await withAction(() => resumePptInfo(threadId, values))
-  }
-
-  const handleSubmitContentSources = async () => {
-    if (contentFiles.length > 0) {
-      await uploadContentFiles(threadId, contentFiles)
-    }
-    const urls = contentUrls.map((item) => item.trim()).filter(Boolean)
-    appendMessage('user', contentFiles.length > 0 || urls.length > 0 ? '已提交内容资料' : '跳过内容资料')
-    await withAction(() => resumeContentSources(threadId, contentFiles.length > 0, urls))
-  }
-
-  const handleSubmitTemplate = async (shouldUseTemplate: boolean) => {
-    if (shouldUseTemplate && templateFile) {
-      await uploadTemplate(threadId, templateFile)
-      appendMessage('user', `已上传模板 ${templateFile.name}`)
-    } else {
-      appendMessage('user', '跳过模板')
-    }
-    await withAction(() => resumeTemplate(threadId, shouldUseTemplate))
-  }
-
-  const handleSubmitFinalStyle = async () => {
-    if (!finalStyle.trim()) return
-    appendMessage('user', finalStyle.trim())
-    await withAction(() => resumeFinalStyle(threadId, finalStyle.trim()))
-  }
-
-  const handleModify = async () => {
-    if (!modifyInstruction.trim() || selectedModifyPages.length === 0) return
-    appendMessage('user', modifyInstruction.trim())
-    await withAction(() => modifyPage(threadId, modifyType, selectedModifyPages, modifyInstruction.trim()))
-    setModifyInstruction('')
-    setModifyDrawerOpen(false)
-  }
-
-  const handleExport = async (type: 'first_draft' | 'final_ppt') => {
-    const slides = type === 'first_draft' ? data.first_draft_results ?? [] : data.final_ppt_results ?? []
-    if (slides.length === 0) {
-      void message.warning(`当前没有可导出的${type === 'first_draft' ? '初稿' : '终稿'}`)
-      return
-    }
-    await exportSlidesToPptx({
-      slides,
-      fileName: `${type}-${threadId}.pptx`,
-      title: type === 'first_draft' ? '初稿导出' : '终稿导出',
-      subject: `thread_id=${threadId}`,
-    })
-    void message.success(`${type === 'first_draft' ? '初稿' : '终稿'}已导出`)
-  }
-
-  const bubbleItems = messages.map((item) => ({
-    key: item.key,
-    content: item.content,
-    placement: item.role === 'user' ? ('end' as const) : ('start' as const),
-    avatar: item.role === 'user' ? { children: 'U' } : { children: 'AI' },
-  }))
 
   const promptItems = promptSamples.map((label) => ({
     key: label,
@@ -358,6 +251,306 @@ function App() {
     },
   ]
 
+  const applySessionDetail = (detail: SessionDetail) => {
+    setSessionDetail(detail)
+    setSessions((current) => upsertSessionSummary(current, detail.session))
+  }
+
+  useEffect(() => {
+    let cancelled = false
+
+    const bootstrap = async () => {
+      try {
+        const result = await listSessions()
+        if (cancelled) return
+        setSessions(result)
+        setActiveSessionId((current) => current ?? result[0]?.id ?? null)
+      } catch (error) {
+        if (cancelled) return
+        const errorMessage = error instanceof Error ? error.message : '加载会话列表失败'
+        void message.error(errorMessage)
+      } finally {
+        if (!cancelled) {
+          setLoadingSessions(false)
+        }
+      }
+    }
+
+    void bootstrap()
+
+    return () => {
+      cancelled = true
+    }
+  }, [message])
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setSessionDetail(null)
+      return
+    }
+
+    let cancelled = false
+    setLoadingDetail(true)
+
+    void getSessionDetail(activeSessionId)
+      .then((detail) => {
+        if (cancelled) return
+        applySessionDetail(detail)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        const errorMessage = error instanceof Error ? error.message : '加载会话详情失败'
+        void message.error(errorMessage)
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingDetail(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionId, message])
+
+  useEffect(() => {
+    if (!activeSessionId) return
+
+    const timer = window.setInterval(() => {
+      void getSessionDetail(activeSessionId)
+        .then((detail) => {
+          setSessionDetail((current) =>
+            current?.session.id === detail.session.id ? detail : current,
+          )
+          setSessions((current) => upsertSessionSummary(current, detail.session))
+        })
+        .catch(() => undefined)
+    }, 10000)
+
+    return () => window.clearInterval(timer)
+  }, [activeSessionId])
+
+  useEffect(() => {
+    setRequirement('')
+    setContentFiles([])
+    setContentUrls([''])
+    setTemplateFile(null)
+    setFinalStyle('')
+    setModifyInstruction('')
+    setModifyDrawerOpen(false)
+    setSelectedModifyPages([])
+    setPptInfoDraft(defaultPptInfoDraft)
+    pptInfoForm.setFieldsValue(defaultPptInfoDraft)
+  }, [activeSessionId, pptInfoForm])
+
+  useEffect(() => {
+    const payload = sessionDetail?.pending_interrupt?.payload
+    if (!payload || activeSession?.stage !== 'awaiting_ppt_info' || typeof payload !== 'object') {
+      return
+    }
+
+    const draftPayload = payload as Partial<PptInfoDraft>
+    const nextDraft = {
+      ...defaultPptInfoDraft,
+      ...draftPayload,
+      layout_style:
+        draftPayload.layout_style === 'grid' || draftPayload.layout_style === 'top_bottom'
+          ? draftPayload.layout_style
+          : defaultPptInfoDraft.layout_style,
+      num_pages:
+        typeof draftPayload.num_pages === 'number'
+          ? draftPayload.num_pages
+          : defaultPptInfoDraft.num_pages,
+    }
+
+    setPptInfoDraft(nextDraft)
+    pptInfoForm.setFieldsValue(nextDraft)
+  }, [activeSession?.stage, pptInfoForm, sessionDetail?.pending_interrupt?.payload])
+
+  useEffect(() => {
+    if (finalDraftCount > 0) {
+      setPreviewType('final_ppt')
+      setModifyType('终稿')
+      return
+    }
+    if (firstDraftCount > 0) {
+      setPreviewType('first_draft')
+      setModifyType('初稿')
+    }
+  }, [finalDraftCount, firstDraftCount])
+
+  useEffect(() => {
+    if (previewList.length === 0) return
+    if (!previewList.some((item) => item.page === selectedPage)) {
+      setSelectedPage(previewList[0].page)
+    }
+  }, [previewList, selectedPage])
+
+  useEffect(() => {
+    if (selectedPage > 0) {
+      setSelectedModifyPages((current) => (current.length > 0 ? current : [selectedPage]))
+    }
+  }, [selectedPage])
+
+  useEffect(() => {
+    setModifyType(availableModifyType)
+  }, [availableModifyType])
+
+  useEffect(() => {
+    const pages =
+      (modifyType === '终稿' ? preview.final_ppt_results : preview.first_draft_results).map(
+        (item) => item.page,
+      ) ?? []
+    setSelectedModifyPages((current) => {
+      const filtered = current.filter((page) => pages.includes(page))
+      if (filtered.length > 0) return filtered
+      return pages.includes(selectedPage) ? [selectedPage] : pages.slice(0, 1)
+    })
+  }, [modifyType, preview.final_ppt_results, preview.first_draft_results, selectedPage])
+
+  const submitMessage = async (input: SessionMessageInput) => {
+    if (!activeSessionId) return
+
+    setActionLoading(true)
+    try {
+      const detail = await sendSessionMessage(activeSessionId, input)
+      applySessionDetail(detail)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '请求失败'
+      void message.error(errorMessage)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleCreateSession = async () => {
+    setActionLoading(true)
+    try {
+      const nextSession = await createSession()
+      setSessions((current) => upsertSessionSummary(current, nextSession))
+      setActiveSessionId(nextSession.id)
+      setSessionDetail(null)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '创建会话失败'
+      void message.error(errorMessage)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleRefreshActiveSession = async () => {
+    if (!activeSessionId) return
+
+    setLoadingDetail(true)
+    try {
+      const detail = await getSessionDetail(activeSessionId)
+      applySessionDetail(detail)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '刷新会话失败'
+      void message.error(errorMessage)
+    } finally {
+      setLoadingDetail(false)
+    }
+  }
+
+  const handleStart = async () => {
+    if (!requirement.trim()) return
+    await submitMessage({
+      type: 'text',
+      content: requirement.trim(),
+    })
+    setRequirement('')
+  }
+
+  const handleSubmitPptInfo = async () => {
+    const values = await pptInfoForm.validateFields()
+    setPptInfoDraft(values)
+    await submitMessage({
+      type: 'interrupt_response',
+      content: `已确认 PPT 信息：${values.theme}`,
+      payload: values,
+    })
+  }
+
+  const handleSubmitContentSources = async () => {
+    if (!activeSessionId) return
+    if (contentFiles.length > 0) {
+      await uploadContentFiles(activeSessionId, contentFiles)
+    }
+    const urls = contentUrls.map((item) => item.trim()).filter(Boolean)
+    await submitMessage({
+      type: 'interrupt_response',
+      content: contentFiles.length > 0 || urls.length > 0 ? '已提交内容资料' : '跳过内容资料',
+      payload: {
+        have_ppt_content_files: contentFiles.length > 0,
+        ppt_content_source_urls: urls,
+      },
+    })
+  }
+
+  const handleSubmitTemplate = async (shouldUseTemplate: boolean) => {
+    if (!activeSessionId) return
+    if (shouldUseTemplate && templateFile) {
+      await uploadTemplate(activeSessionId, templateFile)
+    }
+    await submitMessage({
+      type: 'interrupt_response',
+      content:
+        shouldUseTemplate && templateFile ? `已上传模板 ${templateFile.name}` : '跳过模板',
+      payload: { have_ppt_template: shouldUseTemplate },
+    })
+  }
+
+  const handleSubmitFinalStyle = async () => {
+    if (!finalStyle.trim()) return
+    const style = finalStyle.trim()
+    await submitMessage({
+      type: 'interrupt_response',
+      content: style,
+      payload: style,
+    })
+    setFinalStyle('')
+  }
+
+  const handleModify = async () => {
+    if (!activeSessionId || !modifyInstruction.trim() || selectedModifyPages.length === 0) return
+
+    setActionLoading(true)
+    try {
+      await modifyPage(
+        activeSessionId,
+        modifyType,
+        selectedModifyPages,
+        modifyInstruction.trim(),
+      )
+      const detail = await getSessionDetail(activeSessionId)
+      applySessionDetail(detail)
+      setModifyInstruction('')
+      setModifyDrawerOpen(false)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '修改页面失败'
+      void message.error(errorMessage)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleExport = async (type: 'first_draft' | 'final_ppt') => {
+    if (!activeSessionId) return
+    const slides = type === 'first_draft' ? preview.first_draft_results : preview.final_ppt_results
+    if (slides.length === 0) {
+      void message.warning(`当前没有可导出的${type === 'first_draft' ? '初稿' : '终稿'}`)
+      return
+    }
+    await exportSlidesToPptx({
+      slides,
+      fileName: `${type}-${activeSessionId}.pptx`,
+      title: type === 'first_draft' ? '初稿导出' : '终稿导出',
+      subject: `session_id=${activeSessionId}`,
+    })
+    void message.success(`${type === 'first_draft' ? '初稿' : '终稿'}已导出`)
+  }
+
   const handleContentUploadChange = (info: UploadChangeParam) => {
     const fileList = info.fileList.slice(-8)
     setContentFiles(
@@ -371,8 +564,10 @@ function App() {
   }
 
   const renderRequirementPanel = () => (
-    <Card className="work-card" title="开始一个新的 PPT 会话">
-      <Paragraph type="secondary">从一句自然语言需求开始，Agent 会在关键节点打断并让你确认信息。</Paragraph>
+    <Card className="work-card" title="开始新的需求">
+      <Paragraph type="secondary">
+        当前应用已经按会话列表启动。选择一个会话后，可以从一句自然语言需求开始。
+      </Paragraph>
       <Prompts
         title="常用提示词"
         vertical
@@ -485,7 +680,12 @@ function App() {
         <Button onClick={() => void handleSubmitTemplate(false)} disabled={actionLoading}>
           跳过模板
         </Button>
-        <Button type="primary" onClick={() => void handleSubmitTemplate(true)} loading={actionLoading} disabled={!templateFile}>
+        <Button
+          type="primary"
+          onClick={() => void handleSubmitTemplate(true)}
+          loading={actionLoading}
+          disabled={!templateFile}
+        >
           使用模板继续
         </Button>
       </Space>
@@ -494,7 +694,9 @@ function App() {
 
   const renderFinalStylePanel = () => (
     <Card className="work-card" title="输入终稿风格">
-      <Paragraph type="secondary">初稿已生成。可以先预览右侧页面，再输入例如“绿色简约风”“黑色科技风”这样的整体风格。</Paragraph>
+      <Paragraph type="secondary">
+        初稿已生成。可以先预览右侧页面，再输入例如“绿色简约风”“黑色科技风”这样的整体风格。
+      </Paragraph>
       <Space wrap style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<CloudDownloadOutlined />} onClick={() => void handleExport('first_draft')}>
           导出初稿 PPTX
@@ -530,7 +732,7 @@ function App() {
       <Title level={4} style={{ marginTop: 16 }}>
         生成中
       </Title>
-      <Text type="secondary">当前阶段：{session?.stage ?? 'starting'}</Text>
+      <Text type="secondary">当前阶段：{activeSession?.stage ?? 'starting'}</Text>
     </Card>
   )
 
@@ -547,28 +749,45 @@ function App() {
           修改页面
         </Button>
       </Space>
-      {data.response_content ? (
-        <Alert style={{ marginTop: 16 }} type="success" showIcon message={data.response_content} />
+      {preview.response_content ? (
+        <Alert style={{ marginTop: 16 }} type="success" showIcon message={preview.response_content} />
       ) : null}
     </Card>
   )
 
+  const renderEmptyPanel = () => (
+    <Card className="work-card" title="还没有活动会话">
+      <Empty description="先创建一个会话，再开始输入需求。" />
+      <Button
+        style={{ marginTop: 16 }}
+        type="primary"
+        icon={<PlusOutlined />}
+        onClick={() => void handleCreateSession()}
+        loading={actionLoading}
+      >
+        新建会话
+      </Button>
+    </Card>
+  )
+
   const renderMainPanel = () => {
-    if (loading) return renderRunningPanel()
-    if (!session || session.stage === 'idle') return renderRequirementPanel()
-    if (session.status === 'running') return renderRunningPanel()
-    if (session.stage === 'awaiting_ppt_info') return renderPptInfoPanel()
-    if (session.stage === 'awaiting_content_sources') return renderContentPanel()
-    if (session.stage === 'awaiting_template') return renderTemplatePanel()
-    if (session.stage === 'awaiting_final_style') return renderFinalStylePanel()
-    if (session.status === 'failed') {
+    if (loadingSessions && sessions.length === 0) return renderRunningPanel()
+    if (!activeSession) return renderEmptyPanel()
+    if (loadingDetail && !sessionDetail) return renderRunningPanel()
+    if (activeSession.status === 'running') return renderRunningPanel()
+    if (activeSession.stage === 'awaiting_ppt_info') return renderPptInfoPanel()
+    if (activeSession.stage === 'awaiting_content_sources') return renderContentPanel()
+    if (activeSession.stage === 'awaiting_template') return renderTemplatePanel()
+    if (activeSession.stage === 'awaiting_final_style') return renderFinalStylePanel()
+    if (activeSession.status === 'failed') {
       return (
         <Card className="work-card">
-          <Alert type="error" showIcon message="执行失败" description={session.error?.message ?? '未知错误'} />
+          <Alert type="error" showIcon message="执行失败" description={errorMessage ?? '未知错误'} />
         </Card>
       )
     }
-    return renderCompletedPanel()
+    if (activeSession.status === 'completed') return renderCompletedPanel()
+    return renderRequirementPanel()
   }
 
   const renderSvg = (item: PreviewResult | null) => {
@@ -588,19 +807,29 @@ function App() {
               <Title level={4} style={{ margin: 0 }}>
                 PPT Agent 工作台
               </Title>
-              <Text type="secondary">会话驱动的 PPT 生成与修改</Text>
+              <Text type="secondary">
+                {activeSession?.title ?? '会话驱动的 PPT 生成与修改'}
+              </Text>
             </div>
           </Space>
           <Space wrap>
-            <Tag color={session?.status === 'completed' ? 'success' : session?.status === 'failed' ? 'error' : 'processing'}>
-              {session?.status ?? 'idle'}
+            <Tag
+              color={
+                activeSession?.status === 'completed'
+                  ? 'success'
+                  : activeSession?.status === 'failed'
+                    ? 'error'
+                    : 'processing'
+              }
+            >
+              {activeSession?.status ?? 'idle'}
             </Tag>
-            <Tag>{threadId || '初始化中'}</Tag>
-            <Button icon={<ReloadOutlined />} onClick={() => threadId && void getStatus(threadId).then(applyResponse)}>
+            <Tag>{activeSessionId ?? '未选择会话'}</Tag>
+            <Button icon={<ReloadOutlined />} onClick={() => void handleRefreshActiveSession()} disabled={!activeSessionId}>
               刷新
             </Button>
-            <Button type="primary" icon={<CloudDownloadOutlined />} onClick={() => void handleExport(previewType)}>
-              导出当前预览
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => void handleCreateSession()} loading={actionLoading}>
+              新建会话
             </Button>
           </Space>
         </Flex>
@@ -608,41 +837,83 @@ function App() {
 
       <Layout className="app-body">
         <Sider width={300} className="left-panel">
+          <Card className="panel-card" bordered={false} title="会话列表">
+            {loadingSessions && sessions.length === 0 ? (
+              <Spin />
+            ) : sessions.length === 0 ? (
+              <Empty description="还没有会话" />
+            ) : (
+              <List
+                dataSource={sessions}
+                renderItem={(item) => (
+                  <List.Item
+                    onClick={() => setActiveSessionId(item.id)}
+                    className={item.id === activeSessionId ? 'page-selector-active' : ''}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <Space direction="vertical" size={0}>
+                      <Text strong={item.id === activeSessionId}>{item.title}</Text>
+                      <Text type="secondary">
+                        {item.stage} · {item.updated_at}
+                      </Text>
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
           <Card className="panel-card" bordered={false}>
             <Steps current={stepIndex} direction="vertical" items={stepItems.map((item) => ({ title: item.label }))} />
           </Card>
           <Card className="panel-card" bordered={false} title="当前会话信息">
             <Descriptions column={1} size="small">
-              <Descriptions.Item label="状态">{session?.status ?? 'idle'}</Descriptions.Item>
-              <Descriptions.Item label="阶段">{session?.stage ?? 'idle'}</Descriptions.Item>
-              <Descriptions.Item label="初稿页数">{session?.session_meta.generated_first_draft_pages ?? 0}</Descriptions.Item>
-              <Descriptions.Item label="终稿页数">{session?.session_meta.generated_final_ppt_pages ?? 0}</Descriptions.Item>
+              <Descriptions.Item label="标题">{activeSession?.title ?? '未选择'}</Descriptions.Item>
+              <Descriptions.Item label="状态">{activeSession?.status ?? 'idle'}</Descriptions.Item>
+              <Descriptions.Item label="阶段">{activeSession?.stage ?? 'idle'}</Descriptions.Item>
+              <Descriptions.Item label="初稿页数">{firstDraftCount}</Descriptions.Item>
+              <Descriptions.Item label="终稿页数">{finalDraftCount}</Descriptions.Item>
               <Descriptions.Item label="API">{getApiBaseUrl()}</Descriptions.Item>
             </Descriptions>
-          </Card>
-          <Card className="panel-card" bordered={false} title="提示词快捷入口">
-            <Prompts
-              vertical
-              items={promptItems}
-              onItemClick={(info) => setRequirement(String(info.data.label))}
-            />
           </Card>
         </Sider>
 
         <Content className="center-panel">
           <Card className="chat-card" bordered={false}>
             <div className="chat-history">
-              <Bubble.List items={bubbleItems.length > 0 ? bubbleItems : [{ key: 'empty', content: '欢迎使用 PPT Agent，先在下方输入需求。', placement: 'start', avatar: { children: 'AI' } }]} />
+              <Bubble.List
+                items={
+                  bubbleItems.length > 0
+                    ? bubbleItems
+                    : [
+                        {
+                          key: 'empty',
+                          content: '欢迎使用 PPT Agent，先选择一个会话，再在下方输入需求。',
+                          placement: 'start',
+                          avatar: { children: 'AI' },
+                        },
+                      ]
+                }
+              />
             </div>
+            {sessionDetail?.pending_interrupt ? (
+              <Alert
+                style={{ marginBottom: 16 }}
+                type="info"
+                showIcon
+                message={sessionDetail.pending_interrupt.title}
+                description="当前会话存在待处理的中断，下面的表单会根据阶段提交结构化响应。"
+              />
+            ) : null}
             {renderMainPanel()}
             <div className="sender-wrap">
               <Sender
                 value={requirement}
                 onChange={setRequirement}
                 onSubmit={() => void handleStart()}
-                loading={actionLoading && (!session || session.stage === 'starting' || session.stage === 'idle')}
-                placeholder="输入消息，拖拽或粘贴文件 / 图片，Enter 发送，Shift + Enter 换行"
-                prefix={<Tag bordered={false}>待用户输入</Tag>}
+                loading={actionLoading && (activeSession?.stage === 'starting' || activeSession?.stage === 'idle')}
+                placeholder="输入消息，Enter 发送"
+                prefix={<Tag bordered={false}>{activeSession ? '发送到当前会话' : '先创建会话'}</Tag>}
+                disabled={!activeSessionId || activeSession?.stage !== 'idle'}
               />
             </div>
           </Card>
@@ -665,7 +936,7 @@ function App() {
                     { label: '单页视图', value: 'single' },
                   ]}
                 />
-                <Button icon={<LayoutOutlined />} onClick={() => setModifyDrawerOpen(true)}>
+                <Button icon={<LayoutOutlined />} onClick={() => setModifyDrawerOpen(true)} disabled={previewList.length === 0}>
                   修改
                 </Button>
               </Space>
@@ -702,7 +973,10 @@ function App() {
                   dataSource={previewList}
                   locale={{ emptyText: '暂无页面' }}
                   renderItem={(item) => (
-                    <List.Item onClick={() => setSelectedPage(item.page)} className={selectedPage === item.page ? 'page-selector-active' : ''}>
+                    <List.Item
+                      onClick={() => setSelectedPage(item.page)}
+                      className={selectedPage === item.page ? 'page-selector-active' : ''}
+                    >
                       第 {item.page} 页
                     </List.Item>
                   )}
@@ -743,10 +1017,12 @@ function App() {
             placeholder="选择要修改的页面"
             value={selectedModifyPages}
             onChange={(value) => setSelectedModifyPages(value)}
-            options={(modifyType === '终稿' ? data.final_ppt_results : data.first_draft_results)?.map((item) => ({
-              label: `第 ${item.page} 页`,
-              value: item.page,
-            }))}
+            options={(modifyType === '终稿' ? preview.final_ppt_results : preview.first_draft_results).map(
+              (item) => ({
+                label: `第 ${item.page} 页`,
+                value: item.page,
+              }),
+            )}
           />
           <Sender
             value={modifyInstruction}
