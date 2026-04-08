@@ -158,6 +158,7 @@ class SessionStore:
         interrupt_id = str(uuid.uuid4())
         created_at = now_iso()
         payload_json = _json_dumps(payload)
+        self._resolve_pending_interrupt_rows(session_id, status="resolved")
         self._connection.execute(
             """
             INSERT INTO session_interrupts (
@@ -165,15 +166,6 @@ class SessionStore:
                 created_at, resolved_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
-            ON CONFLICT(session_id) DO UPDATE SET
-                id = excluded.id,
-                interrupt_type = excluded.interrupt_type,
-                title = excluded.title,
-                payload_json = excluded.payload_json,
-                status = excluded.status,
-                message_id = excluded.message_id,
-                created_at = excluded.created_at,
-                resolved_at = NULL
             """,
             (
                 interrupt_id,
@@ -215,15 +207,9 @@ class SessionStore:
         return self._row_to_interrupt(row)
 
     def resolve_interrupt(self, session_id: str, status: str = "resolved") -> None:
-        self._connection.execute(
-            """
-            UPDATE session_interrupts
-            SET status = ?, resolved_at = ?
-            WHERE session_id = ? AND status = 'pending'
-            """,
-            (status, now_iso(), session_id),
-        )
-        self._touch_session(session_id)
+        updated = self._resolve_pending_interrupt_rows(session_id, status=status)
+        if updated:
+            self._touch_session(session_id)
         self._connection.commit()
 
     def get_session_detail(self, session_id: str) -> SessionDetail:
@@ -249,6 +235,17 @@ class SessionStore:
             "UPDATE sessions SET updated_at = ? WHERE id = ?",
             (now_iso(), session_id),
         )
+
+    def _resolve_pending_interrupt_rows(self, session_id: str, status: str) -> int:
+        cursor = self._connection.execute(
+            """
+            UPDATE session_interrupts
+            SET status = ?, resolved_at = ?
+            WHERE session_id = ? AND status = 'pending'
+            """,
+            (status, now_iso(), session_id),
+        )
+        return cursor.rowcount
 
     @staticmethod
     def _row_to_session(row: sqlite3.Row) -> SessionRecord:
