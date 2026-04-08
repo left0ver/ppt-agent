@@ -118,6 +118,20 @@ def test_cross_session_interrupt_message_linkage_is_rejected(tmp_path: Path) -> 
     store = make_store(tmp_path)
     first = store.create_session()
     second = store.create_session()
+    valid_message = store.append_message(
+        second.id,
+        role="ai",
+        type="interrupt",
+        content="初始中断",
+        payload={"type": "input", "title": "初始中断", "payload": {"field": "value"}},
+    )
+    original_interrupt = store.upsert_pending_interrupt(
+        second.id,
+        interrupt_type="input",
+        title="初始中断",
+        payload={"field": "value"},
+        message_id=valid_message.id,
+    )
     message = store.append_message(
         first.id,
         role="ai",
@@ -134,6 +148,11 @@ def test_cross_session_interrupt_message_linkage_is_rejected(tmp_path: Path) -> 
             payload={"field": "value"},
             message_id=message.id,
         )
+
+    pending = store.get_pending_interrupt(second.id)
+    assert pending is not None
+    assert pending.id == original_interrupt.id
+    assert pending.title == "初始中断"
 
 
 def test_second_pending_interrupt_preserves_history(tmp_path: Path) -> None:

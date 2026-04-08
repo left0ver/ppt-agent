@@ -158,28 +158,37 @@ class SessionStore:
         interrupt_id = str(uuid.uuid4())
         created_at = now_iso()
         payload_json = _json_dumps(payload)
-        self._resolve_pending_interrupt_rows(session_id, status="resolved")
-        self._connection.execute(
-            """
-            INSERT INTO session_interrupts (
-                id, session_id, interrupt_type, title, payload_json, status, message_id,
-                created_at, resolved_at
+        savepoint_name = "upsert_pending_interrupt"
+        self._connection.execute(f"SAVEPOINT {savepoint_name}")
+        try:
+            self._resolve_pending_interrupt_rows(session_id, status="resolved")
+            self._connection.execute(
+                """
+                INSERT INTO session_interrupts (
+                    id, session_id, interrupt_type, title, payload_json, status, message_id,
+                    created_at, resolved_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    interrupt_id,
+                    session_id,
+                    interrupt_type,
+                    title,
+                    payload_json,
+                    status,
+                    message_id,
+                    created_at,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
-            """,
-            (
-                interrupt_id,
-                session_id,
-                interrupt_type,
-                title,
-                payload_json,
-                status,
-                message_id,
-                created_at,
-            ),
-        )
-        self._touch_session(session_id)
-        self._connection.commit()
+            self._touch_session(session_id)
+        except Exception:
+            self._connection.execute(f"ROLLBACK TO {savepoint_name}")
+            self._connection.execute(f"RELEASE {savepoint_name}")
+            raise
+        else:
+            self._connection.execute(f"RELEASE {savepoint_name}")
+            self._connection.commit()
         return self.get_pending_interrupt(session_id) or InterruptRecord(
             id=interrupt_id,
             session_id=session_id,

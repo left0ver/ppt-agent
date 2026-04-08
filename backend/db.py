@@ -34,6 +34,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             payload_json TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            -- Required so session_interrupts(session_id, message_id) can target a same-session row.
             UNIQUE(session_id, id)
         );
 
