@@ -294,6 +294,7 @@ def test_submit_interrupt_response_resumes_workflow_and_clears_pending_interrupt
         "status",
     ]
     assert body["messages"][2]["role"] == "user"
+    assert body["messages"][2]["content"] is None
     assert body["messages"][2]["payload"] == {"selected_style": "clean", "audience": "investors"}
     assert body["messages"][3]["role"] == "assistant"
     assert body["messages"][3]["content"]
@@ -337,3 +338,148 @@ def test_upload_attachments_use_session_routes_without_advancing_workflow(tmp_pa
     assert detail.json()["session"]["stage"] == "idle"
     assert detail.json()["messages"] == []
     assert detail.json()["pending_interrupt"] is None
+
+
+def test_modify_page_response_preserves_pending_interrupt_view(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    client = make_client(tmp_path)
+    session = client.post("/api/sessions").json()
+
+    async def fake_start_workflow(input_schema: InputSchema, thread_id: str) -> dict[str, object]:
+        return {
+            "__interrupt__": {
+                "type": "input",
+                "title": "Choose the final style",
+                "values": {"options": ["clean", "bold"]},
+            }
+        }
+
+    class FakeModifyPpt:
+        def invoke(self, payload: object) -> object:
+            return {"page": 1, "svg_content": "<svg />"}
+
+    monkeypatch.setattr(app_module, "start_workflow", fake_start_workflow)
+    monkeypatch.setattr(app_module, "modify_ppt", FakeModifyPpt())
+
+    start_response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={"type": "text", "content": "Create an investor update deck."},
+    )
+    assert start_response.status_code == 200
+    assert start_response.json()["pending_interrupt"]["interrupt_type"] == "input"
+
+    modify_response = client.post(
+        "/api/ppt/modify",
+        json={
+            "thread_id": session["id"],
+            "ppt_type": "终稿",
+            "pages": [1],
+            "user_instruction": "Update the title slide.",
+        },
+    )
+
+    assert modify_response.status_code == 200
+    body = modify_response.json()
+    assert body["status"] == "interrupted"
+    assert body["stage"] == "awaiting_final_style"
+    assert body["interrupt"] == {
+        "type": "input",
+        "title": "Choose the final style",
+        "payload": {"options": ["clean", "bold"]},
+    }
+
+    status_response = client.get("/api/ppt/status", params={"thread_id": session["id"]})
+    assert status_response.status_code == 200
+    assert status_response.json()["interrupt"] == body["interrupt"]
+
+    detail = client.get(f"/api/sessions/{session['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["pending_interrupt"]["interrupt_type"] == "input"
+
+
+def test_interrupt_transition_rolls_back_partial_persistence_on_failure(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    client = make_client(tmp_path)
+    session = client.post("/api/sessions").json()
+
+    async def fake_start_workflow(input_schema: InputSchema, thread_id: str) -> dict[str, object]:
+        return {
+            "__interrupt__": {
+                "type": "upload_ppt_content_files",
+                "title": "Upload supporting documents",
+                "values": {"accepted_types": [".pdf", ".md"]},
+            }
+        }
+
+    def broken_insert_pending_interrupt_row(
+        self: SessionStore,
+        session_id: str,
+        interrupt_type: str,
+        title: str,
+        payload: object,
+        message_id: str,
+        status: str,
+    ) -> None:
+        raise RuntimeError("interrupt write failed")
+
+    monkeypatch.setattr(app_module, "start_workflow", fake_start_workflow)
+    monkeypatch.setattr(
+        SessionStore,
+        "_insert_pending_interrupt_row",
+        broken_insert_pending_interrupt_row,
+    )
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={"type": "text", "content": "Build a QBR deck for the board meeting."},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session"]["status"] == "failed"
+    assert body["session"]["stage"] == "failed"
+    assert body["pending_interrupt"] is None
+    assert [message["type"] for message in body["messages"]] == ["text", "error"]
+    assert all(message["type"] != "interrupt" for message in body["messages"])
+
+    detail = client.get(f"/api/sessions/{session['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["pending_interrupt"] is None
+    assert [message["type"] for message in detail.json()["messages"]] == ["text", "error"]
+
+
+def test_legacy_start_route_persists_initiating_user_message(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    client = make_client(tmp_path)
+    session = client.post("/api/sessions").json()
+
+    async def fake_start_workflow(input_schema: InputSchema, thread_id: str) -> dict[str, object]:
+        return {
+            "__interrupt__": {
+                "type": "upload_ppt_content_files",
+                "title": "Upload supporting documents",
+                "values": {"accepted_types": [".pdf", ".md"]},
+            }
+        }
+
+    monkeypatch.setattr(app_module, "start_workflow", fake_start_workflow)
+
+    response = client.post(
+        "/api/ppt/start",
+        json={"thread_id": session["id"], "ppt_requirement": "Build a board update deck."},
+    )
+
+    assert response.status_code == 200
+
+    detail = client.get(f"/api/sessions/{session['id']}")
+    assert detail.status_code == 200
+    messages = detail.json()["messages"]
+    assert [message["type"] for message in messages] == ["text", "interrupt"]
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "Build a board update deck."

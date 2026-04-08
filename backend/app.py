@@ -440,22 +440,6 @@ def get_latest_error_payload(session_id: str) -> dict[str, Any] | None:
     return _session_error_state.get(session_id)
 
 
-def append_assistant_message(
-    session_id: str,
-    *,
-    type: str,
-    content: str | None,
-    payload: Any = None,
-) -> StoredMessageRecord:
-    return get_active_store().append_message(
-        session_id=session_id,
-        role="assistant",
-        type=type,
-        content=content,
-        payload=payload,
-    )
-
-
 def completion_message_for(raw_response: Any) -> str:
     if isinstance(raw_response, dict):
         response_content = raw_response.get("response_content")
@@ -470,49 +454,30 @@ def persist_workflow_result(session_id: str, raw_response: Any) -> StoredSession
     if interrupt_payload:
         normalized_interrupt = normalize_interrupt_payload(interrupt_payload)
         interrupt_response = build_interrupt_response(normalized_interrupt)
-        interrupt_message = append_assistant_message(
-            session_id,
-            type="interrupt",
-            content=interrupt_response["title"],
-            payload=interrupt_response,
-        )
-        active_store.upsert_pending_interrupt(
+        detail = active_store.record_workflow_interrupt(
             session_id=session_id,
             interrupt_type=interrupt_response["type"],
             title=interrupt_response["title"],
             payload=interrupt_response["payload"],
-            message_id=interrupt_message.id,
-        )
-        active_store.update_session(
-            session_id,
-            status="interrupted",
             stage=map_interrupt_to_stage(normalized_interrupt),
+            message_payload=interrupt_response,
         )
     else:
-        active_store.resolve_interrupt(session_id, status="resolved")
-        active_store.update_session(session_id, status="completed", stage="completed")
-        append_assistant_message(
+        detail = active_store.record_workflow_completion(
             session_id,
-            type="status",
             content=completion_message_for(raw_response),
             payload=raw_response if isinstance(raw_response, dict) and raw_response else None,
         )
     _session_error_state.pop(session_id, None)
-    return active_store.get_session_detail(session_id)
+    return detail
 
 
 def persist_workflow_error(session_id: str, exc: Exception) -> StoredSessionDetail:
     message = str(exc)
     active_store = get_active_store()
-    active_store.update_session(session_id, status="failed", stage="failed")
-    append_assistant_message(
-        session_id,
-        type="error",
-        content=message,
-        payload={"message": message},
-    )
+    detail = active_store.record_workflow_error(session_id, message=message)
     _session_error_state[session_id] = {"message": message}
-    return active_store.get_session_detail(session_id)
+    return detail
 
 
 def build_api_response(record: RuntimeSessionRecord, data: Any = None) -> ApiResponse:
@@ -604,6 +569,23 @@ def require_interrupt_response(request: SubmitMessageRequest) -> Any:
     return request.payload
 
 
+def append_legacy_user_message(
+    session_id: str,
+    *,
+    type: str,
+    content: str | None = None,
+    payload: Any = None,
+) -> None:
+    ensure_session_exists(session_id)
+    get_active_store().append_message(
+        session_id=session_id,
+        role="user",
+        type=type,
+        content=content,
+        payload=payload,
+    )
+
+
 app = FastAPI(title="PPT Agent API", version="0.1.0")
 
 app.add_middleware(
@@ -674,7 +656,7 @@ async def submit_session_message(
                 session_id=session_id,
                 role="user",
                 type="interrupt_response",
-                content=(request.content or pending_interrupt.title or "").strip() or None,
+                content=(request.content or "").strip() or None,
                 payload=payload,
             )
             active_store.update_session(session_id, status="running")
@@ -706,11 +688,21 @@ def upload_session_template_file(
 
 @app.post("/api/ppt/start", response_model=ApiResponse)
 async def start_ppt_generation(request: StartRequest) -> ApiResponse:
+    append_legacy_user_message(
+        request.thread_id,
+        type="text",
+        content=request.ppt_requirement,
+    )
     return await run_generation(request.thread_id, "starting", request.ppt_requirement)
 
 
 @app.post("/api/ppt/resume/ppt-info", response_model=ApiResponse)
 async def resume_ppt_info(request: ResumePptInfoRequest) -> ApiResponse:
+    append_legacy_user_message(
+        request.thread_id,
+        type="interrupt_response",
+        payload=request.ppt_info.model_dump(),
+    )
     return await run_generation(
         request.thread_id,
         "awaiting_content_sources",
@@ -731,6 +723,11 @@ async def resume_content_sources(request: ResumeContentSourcesRequest) -> ApiRes
         "have_ppt_content_files": request.have_ppt_content_files,
         "ppt_content_source_urls": request.ppt_content_source_urls,
     }
+    append_legacy_user_message(
+        request.thread_id,
+        type="interrupt_response",
+        payload=payload,
+    )
     return await run_generation(request.thread_id, "awaiting_template", payload)
 
 
@@ -743,11 +740,22 @@ def upload_template_file(
 
 @app.post("/api/ppt/resume/template", response_model=ApiResponse)
 async def resume_template(request: ResumeTemplateRequest) -> ApiResponse:
+    append_legacy_user_message(
+        request.thread_id,
+        type="interrupt_response",
+        payload=request.have_ppt_template,
+    )
     return await run_generation(request.thread_id, "generating_outline", request.have_ppt_template)
 
 
 @app.post("/api/ppt/resume/final-style", response_model=ApiResponse)
 async def resume_final_style(request: ResumeFinalStyleRequest) -> ApiResponse:
+    append_legacy_user_message(
+        request.thread_id,
+        type="interrupt_response",
+        content=request.user_ppt_style,
+        payload=request.user_ppt_style,
+    )
     return await run_generation(request.thread_id, "generating_final_ppt", request.user_ppt_style)
 
 
@@ -795,11 +803,10 @@ def modify_page(request: ModifyPageRequest) -> ApiResponse:
 
         record.status = previous_status if previous_status in {"interrupted", "completed"} else "completed"
         record.stage = previous_stage if previous_stage in {"awaiting_final_style", "completed"} else "completed"
-        record.last_interrupt = None
         record.error = None
         save_runtime_session(record)
         return build_api_response(
-            record,
+            get_runtime_session(request.thread_id),
             data={
                 "response_content": f"已完成 {len(new_svg_list)} 页{request.ppt_type}修改。",
                 "new_svg_list": new_svg_list,
@@ -811,4 +818,4 @@ def modify_page(request: ModifyPageRequest) -> ApiResponse:
         record.stage = "failed"
         record.error = {"message": str(exc)}
         save_runtime_session(record)
-        return build_api_response(record)
+        return build_api_response(get_runtime_session(request.thread_id))
