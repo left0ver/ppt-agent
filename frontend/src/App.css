@@ -171,24 +171,12 @@
 .workspace-shell__top {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
-.workspace-shell__meta {
-  padding: 20px 24px;
-  border: 1px solid rgba(42, 95, 146, 0.08);
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 18px 48px rgba(64, 96, 132, 0.12);
-  backdrop-filter: blur(18px);
+.workspace-toolbar {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-}
-
-.workspace-shell__eyebrow {
-  color: #53708e;
+  justify-content: flex-end;
 }
 
 .workspace-body {
@@ -339,12 +327,167 @@
   height: 100%;
 }
 
+.chat-thread__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.chat-thread__header .ant-typography {
+  margin-bottom: 0;
+}
+
+.chat-thread__eyebrow {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #5a7691;
+}
+
+.chat-thread__subtitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 0 !important;
+}
+
 .chat-history {
   flex: 1;
   min-height: 260px;
   max-height: 46vh;
   overflow: auto;
   padding: 8px 4px;
+}
+
+.chat-thread__empty,
+.message-row {
+  display: flex;
+  gap: 12px;
+}
+
+.chat-thread__empty {
+  align-items: flex-start;
+}
+
+.chat-thread__empty-copy {
+  max-width: 520px;
+}
+
+.message-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.message-row--user {
+  justify-content: flex-end;
+}
+
+.chat-thread__assistant-avatar,
+.chat-thread__user-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.chat-thread__assistant-avatar {
+  background: linear-gradient(135deg, #f3f7fc, #ffffff);
+  border: 1px solid rgba(59, 92, 127, 0.12);
+  color: #28537a;
+}
+
+.chat-thread__user-avatar {
+  background: linear-gradient(135deg, #235b92, #2f77b5);
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(35, 91, 146, 0.22);
+}
+
+.message-bubble,
+.interrupt-card {
+  max-width: min(720px, 100%);
+}
+
+.message-bubble {
+  padding: 14px 18px;
+  border-radius: 20px;
+  background: rgba(245, 248, 252, 0.98);
+  border: 1px solid rgba(59, 92, 127, 0.08);
+  color: #1c3045;
+  line-height: 1.65;
+}
+
+.message-bubble--user {
+  background: linear-gradient(135deg, #235b92, #2d73af);
+  color: #fff;
+  border-color: rgba(35, 91, 146, 0.1);
+}
+
+.message-bubble--error {
+  background: linear-gradient(180deg, rgba(255, 244, 242, 0.98), rgba(255, 248, 247, 0.98));
+  border-color: rgba(220, 83, 75, 0.14);
+  color: #8f2f29;
+}
+
+.message-bubble--status {
+  background: linear-gradient(180deg, rgba(238, 247, 236, 0.98), rgba(248, 252, 246, 0.98));
+  border-color: rgba(80, 140, 82, 0.18);
+}
+
+.interrupt-card {
+  border: 1px solid rgba(42, 95, 146, 0.08) !important;
+  border-radius: 24px !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 250, 255, 0.98)) !important;
+}
+
+.interrupt-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.interrupt-card__header .ant-typography {
+  margin-bottom: 0;
+}
+
+.interrupt-card__form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.interrupt-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: #49667f;
+}
+
+.interrupt-card__field--full {
+  grid-column: 1 / -1;
+}
+
+.interrupt-card__upload {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px dashed rgba(42, 95, 146, 0.18);
+  border-radius: 18px;
+  color: #49667f;
+}
+
+.interrupt-card__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .sender-wrap {
@@ -495,10 +638,6 @@
     padding-top: 0;
   }
 
-  .workspace-shell__meta {
-    padding: 18px 18px 16px;
-  }
-
   .workspace-body {
     flex-direction: column;
   }
@@ -520,6 +659,10 @@
   .top-timeline__list {
     grid-template-columns: repeat(7, minmax(164px, 1fr));
   }
+
+  .interrupt-card__form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 768px) {
@@ -531,13 +674,11 @@
     padding: 12px;
   }
 
-  .workspace-shell__meta,
   .top-timeline {
     padding: 16px;
     border-radius: 22px !important;
   }
 
-  .workspace-shell__meta,
   .top-timeline__header {
     flex-direction: column;
     align-items: flex-start;

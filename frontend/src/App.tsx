@@ -1,44 +1,30 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  CloudDownloadOutlined,
-  EyeOutlined,
-  FilePptOutlined,
-  FolderOpenOutlined,
   FullscreenOutlined,
   LayoutOutlined,
-  PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
-import { Bubble, Prompts, Sender } from '@ant-design/x'
+import { Sender } from '@ant-design/x'
 import {
   Alert,
   App as AntApp,
   Button,
   Card,
-  Divider,
   Drawer,
   Empty,
   Flex,
-  Form,
-  Input,
-  InputNumber,
   Layout,
   List,
   Modal,
   Select,
   Segmented,
   Space,
-  Spin,
   Tabs,
-  Tag,
-  Typography,
-  Upload,
 } from 'antd'
-import type { GetProp, TabsProps } from 'antd'
+import type { TabsProps } from 'antd'
 import './App.css'
 import {
   createSession,
-  getApiBaseUrl,
   getSessionDetail,
   listSessions,
   modifyPage,
@@ -46,7 +32,7 @@ import {
   uploadContentFiles,
   uploadTemplate,
 } from './api'
-import { exportSlidesToPptx } from './pptExport'
+import ChatThread from './components/ChatThread'
 import SessionSidebar from './components/SessionSidebar'
 import TopTimeline from './components/TopTimeline'
 import type {
@@ -59,36 +45,10 @@ import type {
 } from './types'
 
 const { Sider, Content } = Layout
-const { Dragger } = Upload
-const { Paragraph, Text, Title } = Typography
-
-type UploadChangeParam = Parameters<GetProp<typeof Upload, 'onChange'>>[0]
-
-type PptInfoDraft = {
-  target_audience: string
-  user_role: string
-  num_pages: number
-  theme: string
-  layout_style: 'top_bottom' | 'grid'
-}
-
-const promptSamples = [
-  '我是学生，想做一个 DeepSeek 论文汇报，排版使用上下结构',
-  '我要做一份 AI 产品介绍，适合投资人演示，控制在 12 页内',
-  '帮我生成一份企业内训课件，主题是知识库和智能体落地',
-]
 
 const emptyPreview: SessionPreview = {
   first_draft_results: [],
   final_ppt_results: [],
-}
-
-const defaultPptInfoDraft: PptInfoDraft = {
-  target_audience: '',
-  user_role: '',
-  num_pages: 10,
-  theme: '',
-  layout_style: 'top_bottom',
 }
 
 function sortSessionsByUpdatedAt(items: SessionSummary[]): SessionSummary[] {
@@ -100,52 +60,15 @@ function upsertSessionSummary(items: SessionSummary[], next: SessionSummary): Se
   return sortSessionsByUpdatedAt([next, ...filtered])
 }
 
-function getMessageText(message: SessionMessage): string {
-  if (typeof message.content === 'string' && message.content.trim()) {
-    return message.content
-  }
-
-  if (message.type === 'interrupt' && message.payload && typeof message.payload === 'object') {
-    const title = (message.payload as { title?: unknown }).title
-    if (typeof title === 'string' && title.trim()) {
-      return title
-    }
-  }
-
-  if (message.type === 'error') {
-    const payloadMessage =
-      message.payload && typeof message.payload === 'object'
-        ? (message.payload as { message?: unknown }).message
-        : null
-    if (typeof payloadMessage === 'string' && payloadMessage.trim()) {
-      return `执行失败：${payloadMessage}`
-    }
-    return '执行失败'
-  }
-
-  if (message.type === 'status') {
-    return '状态已更新'
-  }
-
-  if (message.type === 'interrupt_response') {
-    return '已提交确认信息'
-  }
-
-  return ''
-}
-
-function extractErrorMessage(detail: SessionDetail | null): string | null {
-  if (!detail) return null
-  const latestError = [...detail.messages].reverse().find((message) => message.type === 'error')
-  if (!latestError) return null
-  if (typeof latestError.content === 'string' && latestError.content.trim()) {
-    return latestError.content
-  }
-  const payloadMessage =
-    latestError.payload && typeof latestError.payload === 'object'
-      ? (latestError.payload as { message?: unknown }).message
+function getInterruptEnvelope(message: SessionMessage): { kind: string } {
+  const payload =
+    message.payload && typeof message.payload === 'object' && !Array.isArray(message.payload)
+      ? (message.payload as Record<string, unknown>)
       : null
-  return typeof payloadMessage === 'string' && payloadMessage.trim() ? payloadMessage : '未知错误'
+
+  return {
+    kind: typeof payload?.type === 'string' ? payload.type : '',
+  }
 }
 
 function App() {
@@ -157,11 +80,6 @@ function App() {
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
   const [requirement, setRequirement] = useState('')
-  const [pptInfoDraft, setPptInfoDraft] = useState<PptInfoDraft>(defaultPptInfoDraft)
-  const [contentFiles, setContentFiles] = useState<File[]>([])
-  const [contentUrls, setContentUrls] = useState([''])
-  const [templateFile, setTemplateFile] = useState<File | null>(null)
-  const [finalStyle, setFinalStyle] = useState('')
   const [modifyDrawerOpen, setModifyDrawerOpen] = useState(false)
   const [previewType, setPreviewType] = useState<'first_draft' | 'final_ppt'>('first_draft')
   const [selectedPage, setSelectedPage] = useState(1)
@@ -170,7 +88,6 @@ function App() {
   const [selectedModifyPages, setSelectedModifyPages] = useState<number[]>([])
   const [previewMode, setPreviewMode] = useState<'gallery' | 'single'>('single')
   const [zoomOpen, setZoomOpen] = useState(false)
-  const [pptInfoForm] = Form.useForm<PptInfoDraft>()
 
   const activeSessionDetail =
     sessionDetail?.session.id === activeSessionId ? sessionDetail : null
@@ -184,35 +101,11 @@ function App() {
   const canModifyFirstDraft = firstDraftCount > 0
   const canModifyFinalDraft = finalDraftCount > 0
   const availableModifyType = canModifyFinalDraft ? '终稿' : '初稿'
-  const errorMessage = extractErrorMessage(activeSessionDetail)
-
-  const bubbleItems = useMemo(
-    () =>
-      (activeSessionDetail?.messages ?? [])
-        .map((item) => {
-          const content = getMessageText(item)
-          if (!content) return null
-          return {
-            key: item.id,
-            content,
-            placement: item.role === 'user' ? ('end' as const) : ('start' as const),
-            avatar: item.role === 'user' ? { children: 'U' } : { children: 'AI' },
-          }
-        })
-        .filter((item): item is NonNullable<typeof item> => item !== null),
-    [activeSessionDetail?.messages],
-  )
 
   const selectedPreview = useMemo(
     () => previewList.find((item) => item.page === selectedPage) ?? previewList[0] ?? null,
     [previewList, selectedPage],
   )
-
-  const promptItems = promptSamples.map((label) => ({
-    key: label,
-    label,
-    description: '点击后填入输入框',
-  }))
 
   const previewTabItems: TabsProps['items'] = [
     {
@@ -310,40 +203,10 @@ function App() {
 
   useEffect(() => {
     setRequirement('')
-    setContentFiles([])
-    setContentUrls([''])
-    setTemplateFile(null)
-    setFinalStyle('')
     setModifyInstruction('')
     setModifyDrawerOpen(false)
     setSelectedModifyPages([])
-    setPptInfoDraft(defaultPptInfoDraft)
-    pptInfoForm.setFieldsValue(defaultPptInfoDraft)
-  }, [activeSessionId, pptInfoForm])
-
-  useEffect(() => {
-    const payload = activeSessionDetail?.pending_interrupt?.payload
-    if (!payload || activeSession?.stage !== 'awaiting_ppt_info' || typeof payload !== 'object') {
-      return
-    }
-
-    const draftPayload = payload as Partial<PptInfoDraft>
-    const nextDraft = {
-      ...defaultPptInfoDraft,
-      ...draftPayload,
-      layout_style:
-        draftPayload.layout_style === 'grid' || draftPayload.layout_style === 'top_bottom'
-          ? draftPayload.layout_style
-          : defaultPptInfoDraft.layout_style,
-      num_pages:
-        typeof draftPayload.num_pages === 'number'
-          ? draftPayload.num_pages
-          : defaultPptInfoDraft.num_pages,
-    }
-
-    setPptInfoDraft(nextDraft)
-    pptInfoForm.setFieldsValue(nextDraft)
-  }, [activeSession?.stage, activeSessionDetail?.pending_interrupt?.payload, pptInfoForm])
+  }, [activeSessionId])
 
   useEffect(() => {
     if (finalDraftCount > 0) {
@@ -440,54 +303,117 @@ function App() {
     setRequirement('')
   }
 
-  const handleSubmitPptInfo = async () => {
-    const values = await pptInfoForm.validateFields()
-    setPptInfoDraft(values)
-    await submitMessage({
-      type: 'interrupt_response',
-      content: `已确认 PPT 信息：${values.theme}`,
-      payload: values,
-    })
-  }
+  const handleInterruptSubmit = async (messageId: string, payload: unknown) => {
+    if (!activeSessionId || !activeSessionDetail) return
 
-  const handleSubmitContentSources = async () => {
-    if (!activeSessionId) return
-    if (contentFiles.length > 0) {
-      await uploadContentFiles(activeSessionId, contentFiles)
+    const targetMessage = activeSessionDetail.messages.find((item) => item.id === messageId)
+    if (!targetMessage) return
+
+    const kind = getInterruptEnvelope(targetMessage).kind
+
+    switch (kind) {
+      case 'edit':
+      case 'ppt_info': {
+        const values =
+          payload && typeof payload === 'object'
+            ? (payload as {
+                theme?: string
+              })
+            : {}
+        await submitMessage({
+          type: 'interrupt_response',
+          content: values.theme ? `已确认 PPT 信息：${values.theme}` : '已确认 PPT 信息',
+          payload,
+        })
+        return
+      }
+      case 'upload_ppt_content_files': {
+        const values =
+          payload && typeof payload === 'object'
+            ? (payload as { files?: File[]; urls?: string[] })
+            : {}
+        const files = Array.isArray(values.files) ? values.files : []
+        const urls = Array.isArray(values.urls) ? values.urls.filter(Boolean) : []
+
+        setActionLoading(true)
+        try {
+          if (files.length > 0) {
+            await uploadContentFiles(activeSessionId, files)
+          }
+          const detail = await sendSessionMessage(activeSessionId, {
+            type: 'interrupt_response',
+            content: files.length > 0 || urls.length > 0 ? '已提交内容资料' : '跳过内容资料',
+            payload: {
+              have_ppt_content_files: files.length > 0,
+              ppt_content_source_urls: urls,
+            },
+          })
+          applySessionDetail(detail)
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : '提交资料失败'
+          void message.error(errorMessage)
+        } finally {
+          setActionLoading(false)
+        }
+        return
+      }
+      case 'upload_ppt_template': {
+        const values =
+          payload && typeof payload === 'object'
+            ? (payload as { shouldUseTemplate?: boolean; file?: File | null })
+            : {}
+        const shouldUseTemplate = Boolean(values.shouldUseTemplate)
+        const file = values.file instanceof File ? values.file : null
+
+        setActionLoading(true)
+        try {
+          if (shouldUseTemplate && file) {
+            await uploadTemplate(activeSessionId, file)
+          }
+          const detail = await sendSessionMessage(activeSessionId, {
+            type: 'interrupt_response',
+            content:
+              shouldUseTemplate && file ? `已上传模板 ${file.name}` : '跳过模板',
+            payload: { have_ppt_template: shouldUseTemplate },
+          })
+          applySessionDetail(detail)
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : '提交模板失败'
+          void message.error(errorMessage)
+        } finally {
+          setActionLoading(false)
+        }
+        return
+      }
+      case 'input': {
+        const style = typeof payload === 'string' ? payload.trim() : ''
+        if (!style) return
+        await submitMessage({
+          type: 'interrupt_response',
+          content: style,
+          payload: style,
+        })
+        return
+      }
+      case 'confirmation':
+      case 'confirm': {
+        const values =
+          payload && typeof payload === 'object'
+            ? (payload as { confirmed?: boolean })
+            : {}
+        await submitMessage({
+          type: 'interrupt_response',
+          content: values.confirmed ? '确认' : '取消',
+          payload: { confirmed: Boolean(values.confirmed) },
+        })
+        return
+      }
+      default:
+        await submitMessage({
+          type: 'interrupt_response',
+          payload,
+        })
     }
-    const urls = contentUrls.map((item) => item.trim()).filter(Boolean)
-    await submitMessage({
-      type: 'interrupt_response',
-      content: contentFiles.length > 0 || urls.length > 0 ? '已提交内容资料' : '跳过内容资料',
-      payload: {
-        have_ppt_content_files: contentFiles.length > 0,
-        ppt_content_source_urls: urls,
-      },
-    })
-  }
-
-  const handleSubmitTemplate = async (shouldUseTemplate: boolean) => {
-    if (!activeSessionId) return
-    if (shouldUseTemplate && templateFile) {
-      await uploadTemplate(activeSessionId, templateFile)
-    }
-    await submitMessage({
-      type: 'interrupt_response',
-      content:
-        shouldUseTemplate && templateFile ? `已上传模板 ${templateFile.name}` : '跳过模板',
-      payload: { have_ppt_template: shouldUseTemplate },
-    })
-  }
-
-  const handleSubmitFinalStyle = async () => {
-    if (!finalStyle.trim()) return
-    const style = finalStyle.trim()
-    await submitMessage({
-      type: 'interrupt_response',
-      content: style,
-      payload: style,
-    })
-    setFinalStyle('')
   }
 
   const handleModify = async () => {
@@ -513,252 +439,6 @@ function App() {
     }
   }
 
-  const handleExport = async (type: 'first_draft' | 'final_ppt') => {
-    if (!activeSessionId) return
-    const slides = type === 'first_draft' ? preview.first_draft_results : preview.final_ppt_results
-    if (slides.length === 0) {
-      void message.warning(`当前没有可导出的${type === 'first_draft' ? '初稿' : '终稿'}`)
-      return
-    }
-    await exportSlidesToPptx({
-      slides,
-      fileName: `${type}-${activeSessionId}.pptx`,
-      title: type === 'first_draft' ? '初稿导出' : '终稿导出',
-      subject: `session_id=${activeSessionId}`,
-    })
-    void message.success(`${type === 'first_draft' ? '初稿' : '终稿'}已导出`)
-  }
-
-  const handleContentUploadChange = (info: UploadChangeParam) => {
-    const fileList = info.fileList.slice(-8)
-    setContentFiles(
-      fileList.reduce<File[]>((acc, item) => {
-        if (item.originFileObj) {
-          acc.push(item.originFileObj as File)
-        }
-        return acc
-      }, []),
-    )
-  }
-
-  const renderRequirementPanel = () => (
-    <Card className="work-card" title="开始新的需求">
-      <Paragraph type="secondary">
-        当前应用已经按会话列表启动。选择一个会话后，可以从一句自然语言需求开始。
-      </Paragraph>
-      <Prompts
-        title="常用提示词"
-        vertical
-        items={promptItems}
-        onItemClick={(info) => setRequirement(String(info.data.label))}
-      />
-    </Card>
-  )
-
-  const renderPptInfoPanel = () => (
-    <Card className="work-card" title="确认 PPT 基本信息">
-      <Form form={pptInfoForm} layout="vertical" initialValues={pptInfoDraft}>
-        <Form.Item label="目标受众" name="target_audience" rules={[{ required: true }]}>
-          <Input placeholder="导师和同学" />
-        </Form.Item>
-        <Form.Item label="用户角色" name="user_role" rules={[{ required: true }]}>
-          <Input placeholder="学生 / 产品经理 / 讲师" />
-        </Form.Item>
-        <Flex gap={12}>
-          <Form.Item label="页数" name="num_pages" rules={[{ required: true }]} className="half-field">
-            <InputNumber min={1} max={30} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="布局" name="layout_style" rules={[{ required: true }]} className="half-field">
-            <Segmented
-              block
-              options={[
-                { label: '上下结构', value: 'top_bottom' },
-                { label: '网格布局', value: 'grid' },
-              ]}
-            />
-          </Form.Item>
-        </Flex>
-        <Form.Item label="主题" name="theme" rules={[{ required: true }]}>
-          <Input placeholder="DeepSeek 论文汇报" />
-        </Form.Item>
-      </Form>
-      <Button type="primary" onClick={() => void handleSubmitPptInfo()} loading={actionLoading}>
-        提交基础信息
-      </Button>
-    </Card>
-  )
-
-  const renderContentPanel = () => (
-    <Card className="work-card" title="上传资料或补充 URL">
-      <Alert
-        type="info"
-        showIcon
-        message="资料是可选项"
-        description="可以上传 PDF、DOCX、Markdown，也可以只填 URL。如果都不提供，后端会自行搜索资料。"
-        style={{ marginBottom: 16 }}
-      />
-      <Dragger
-        multiple
-        beforeUpload={() => false}
-        accept=".pdf,.docx,.md,.markdown"
-        onChange={handleContentUploadChange}
-      >
-        <p className="upload-emoji">
-          <FolderOpenOutlined />
-        </p>
-        <p>拖拽资料到这里，或点击上传</p>
-      </Dragger>
-      <Divider />
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        {contentUrls.map((item, index) => (
-          <Input
-            key={`${index}-${item}`}
-            value={item}
-            placeholder="https://example.com/article"
-            onChange={(event) => {
-              const next = [...contentUrls]
-              next[index] = event.target.value
-              setContentUrls(next)
-            }}
-          />
-        ))}
-        <Button icon={<PlusOutlined />} onClick={() => setContentUrls([...contentUrls, ''])}>
-          增加 URL
-        </Button>
-      </Space>
-      <Divider />
-      <Button type="primary" onClick={() => void handleSubmitContentSources()} loading={actionLoading}>
-        提交资料来源
-      </Button>
-    </Card>
-  )
-
-  const renderTemplatePanel = () => (
-    <Card className="work-card" title="上传模板">
-      <Alert
-        type="warning"
-        showIcon
-        message="模板格式约束"
-        description="当前后端只支持 .ppt / .pptx 模板参与生成，上传后会覆盖之前的模板。"
-        style={{ marginBottom: 16 }}
-      />
-      <Dragger
-        maxCount={1}
-        beforeUpload={() => false}
-        accept=".ppt,.pptx"
-        onChange={(info) => setTemplateFile(info.fileList[0]?.originFileObj ?? null)}
-      >
-        <p className="upload-emoji">
-          <FilePptOutlined />
-        </p>
-        <p>上传模板文件</p>
-      </Dragger>
-      <Divider />
-      <Space>
-        <Button onClick={() => void handleSubmitTemplate(false)} disabled={actionLoading}>
-          跳过模板
-        </Button>
-        <Button
-          type="primary"
-          onClick={() => void handleSubmitTemplate(true)}
-          loading={actionLoading}
-          disabled={!templateFile}
-        >
-          使用模板继续
-        </Button>
-      </Space>
-    </Card>
-  )
-
-  const renderFinalStylePanel = () => (
-    <Card className="work-card" title="输入终稿风格">
-      <Paragraph type="secondary">
-        初稿已生成。可以先预览右侧页面，再输入例如“绿色简约风”“黑色科技风”这样的整体风格。
-      </Paragraph>
-      <Space wrap style={{ marginBottom: 16 }}>
-        <Button type="primary" icon={<CloudDownloadOutlined />} onClick={() => void handleExport('first_draft')}>
-          导出初稿 PPTX
-        </Button>
-        <Button icon={<EyeOutlined />} onClick={() => setModifyDrawerOpen(true)}>
-          修改初稿
-        </Button>
-      </Space>
-      <Prompts
-        vertical
-        items={['绿色简约风', '黑色科技风', '蓝白商务风'].map((label) => ({
-          key: label,
-          label,
-          description: '点击填入风格输入框',
-        }))}
-        onItemClick={(info) => setFinalStyle(String(info.data.label))}
-      />
-      <div style={{ marginTop: 16 }}>
-        <Sender
-          value={finalStyle}
-          onChange={setFinalStyle}
-          onSubmit={() => void handleSubmitFinalStyle()}
-          loading={actionLoading}
-          placeholder="输入最终风格"
-        />
-      </div>
-    </Card>
-  )
-
-  const renderRunningPanel = () => (
-    <Card className="work-card running-card">
-      <Spin size="large" />
-      <Title level={4} style={{ marginTop: 16 }}>
-        生成中
-      </Title>
-      <Text type="secondary">当前阶段：{activeSession?.stage ?? 'starting'}</Text>
-    </Card>
-  )
-
-  const renderCompletedPanel = () => (
-    <Card className="work-card" title="输出结果">
-      <Space wrap>
-        <Button type="primary" icon={<CloudDownloadOutlined />} onClick={() => void handleExport('first_draft')}>
-          导出初稿 PPTX
-        </Button>
-        <Button icon={<CloudDownloadOutlined />} onClick={() => void handleExport('final_ppt')}>
-          导出终稿 PPTX
-        </Button>
-        <Button icon={<EyeOutlined />} onClick={() => setModifyDrawerOpen(true)}>
-          修改页面
-        </Button>
-      </Space>
-      {preview.response_content ? (
-        <Alert style={{ marginTop: 16 }} type="success" showIcon message={preview.response_content} />
-      ) : null}
-    </Card>
-  )
-
-  const renderEmptyPanel = () => (
-    <Card className="work-card" title="还没有活动会话">
-      <Empty description="先创建一个会话，再开始输入需求。" />
-    </Card>
-  )
-
-  const renderMainPanel = () => {
-    if (loadingSessions && sessions.length === 0) return renderRunningPanel()
-    if (!activeSession) return renderEmptyPanel()
-    if (loadingDetail && !activeSessionDetail) return renderRunningPanel()
-    if (activeSession.status === 'running') return renderRunningPanel()
-    if (activeSession.stage === 'awaiting_ppt_info') return renderPptInfoPanel()
-    if (activeSession.stage === 'awaiting_content_sources') return renderContentPanel()
-    if (activeSession.stage === 'awaiting_template') return renderTemplatePanel()
-    if (activeSession.stage === 'awaiting_final_style') return renderFinalStylePanel()
-    if (activeSession.status === 'failed') {
-      return (
-        <Card className="work-card">
-          <Alert type="error" showIcon message="执行失败" description={errorMessage ?? '未知错误'} />
-        </Card>
-      )
-    }
-    if (activeSession.status === 'completed') return renderCompletedPanel()
-    return renderRequirementPanel()
-  }
-
   const renderSvg = (item: PreviewResult | null) => {
     if (!item?.svg_content) {
       return <Empty description="当前还没有可预览的 SVG 页面" />
@@ -781,87 +461,41 @@ function App() {
 
       <Layout className="workspace-shell">
         <div className="workspace-shell__top">
-          <div className="workspace-shell__meta">
-            <div>
-              <p className="workspace-shell__eyebrow">PPT Agent Workspace</p>
-              <Title level={3} style={{ margin: 0 }}>
-                {activeSession?.title ?? '多会话 PPT 工作区'}
-              </Title>
-              <Text type="secondary">
-                {activeSession?.stage ?? 'idle'} · API {getApiBaseUrl()}
-              </Text>
-            </div>
-            <Space wrap>
-              <Tag
-                color={
-                  activeSession?.status === 'completed'
-                    ? 'success'
-                    : activeSession?.status === 'failed'
-                      ? 'error'
-                      : 'processing'
-                }
-              >
-                {activeSession?.status ?? 'idle'}
-              </Tag>
-              <Tag>{activeSessionId ?? '未选择会话'}</Tag>
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={() => void handleRefreshActiveSession()}
-                disabled={!activeSessionId}
-              >
-                刷新
-              </Button>
-            </Space>
-          </div>
-
           <TopTimeline
             stage={activeSession?.stage ?? 'idle'}
             firstDraftCount={firstDraftCount}
             finalDraftCount={finalDraftCount}
           />
+          <div className="workspace-toolbar">
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => void handleRefreshActiveSession()}
+              disabled={!activeSessionId}
+            >
+              刷新
+            </Button>
+          </div>
         </div>
 
         <Layout className="workspace-body">
           <Content className="center-panel">
-            <Card className="chat-card" bordered={false}>
-              <div className="chat-history">
-                <Bubble.List
-                  items={
-                    bubbleItems.length > 0
-                      ? bubbleItems
-                      : [
-                          {
-                            key: 'empty',
-                            content: '欢迎使用 PPT Agent，先选择一个会话，再在下方输入需求。',
-                            placement: 'start',
-                            avatar: { children: 'AI' },
-                          },
-                        ]
-                  }
-                />
-              </div>
-              {activeSessionDetail?.pending_interrupt ? (
-                <Alert
-                  style={{ marginBottom: 16 }}
-                  type="info"
-                  showIcon
-                  message={activeSessionDetail.pending_interrupt.title}
-                  description="当前会话存在待处理的中断，下面的表单会根据阶段提交结构化响应。"
-                />
-              ) : null}
-              {renderMainPanel()}
-              <div className="sender-wrap">
-                <Sender
-                  value={requirement}
-                  onChange={setRequirement}
-                  onSubmit={() => void handleStart()}
-                  loading={actionLoading && (activeSession?.stage === 'starting' || activeSession?.stage === 'idle')}
-                  placeholder="输入消息，Enter 发送"
-                  prefix={<Tag bordered={false}>{activeSession ? '发送到当前会话' : '先创建会话'}</Tag>}
-                  disabled={!activeSessionId || activeSession?.stage !== 'idle'}
-                />
-              </div>
-            </Card>
+            <ChatThread
+              sessionTitle={activeSession?.title ?? '多会话 PPT 工作区'}
+              sessionStatus={activeSession?.status ?? 'idle'}
+              sessionStage={activeSession?.stage ?? 'idle'}
+              loading={loadingSessions || (loadingDetail && !activeSessionDetail)}
+              actionLoading={actionLoading}
+              messages={activeSessionDetail?.messages ?? []}
+              pendingInterruptId={activeSessionDetail?.pending_interrupt?.message_id ?? null}
+              requirement={requirement}
+              onRequirementChange={setRequirement}
+              onRename={() => undefined}
+              onSend={() => void handleStart()}
+              onSubmitInterrupt={(messageId, payload) =>
+                void handleInterruptSubmit(messageId, payload)
+              }
+              hasActiveSession={Boolean(activeSessionId)}
+            />
           </Content>
 
           <Sider width={420} className="right-panel">
@@ -981,7 +615,12 @@ function App() {
             loading={actionLoading}
             placeholder="例如：背景改成蓝色，标题更粗一点，正文字号统一"
           />
-          <Button type="primary" onClick={() => void handleModify()} loading={actionLoading} disabled={selectedModifyPages.length === 0}>
+          <Button
+            type="primary"
+            onClick={() => void handleModify()}
+            loading={actionLoading}
+            disabled={selectedModifyPages.length === 0}
+          >
             提交多页修改
           </Button>
         </Space>

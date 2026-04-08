@@ -11,6 +11,7 @@ vi.mock('@ant-design/icons', () => {
   return {
     BellOutlined: Icon,
     CloudDownloadOutlined: Icon,
+    EditOutlined: Icon,
     EyeOutlined: Icon,
     FilePptOutlined: Icon,
     FolderOpenOutlined: Icon,
@@ -18,6 +19,7 @@ vi.mock('@ant-design/icons', () => {
     LayoutOutlined: Icon,
     PlusOutlined: Icon,
     ReloadOutlined: Icon,
+    UploadOutlined: Icon,
   }
 })
 
@@ -27,24 +29,30 @@ vi.mock('@ant-design/x', async () => {
     onChange,
     onSubmit,
     placeholder,
+    disabled,
   }: {
     value?: string
     onChange?: (value: string) => void
     onSubmit?: () => void
     placeholder?: string
+    disabled?: boolean
   }) => (
     <form
       onSubmit={(event) => {
         event.preventDefault()
-        onSubmit?.()
+        if (!disabled) {
+          onSubmit?.()
+        }
       }}
     >
       <input
         aria-label={placeholder ?? 'sender'}
+        placeholder={placeholder}
         value={value ?? ''}
+        disabled={disabled}
         onChange={(event) => onChange?.(event.target.value)}
       />
-      <button type="submit">submit</button>
+      <button type="submit" disabled={disabled}>submit</button>
     </form>
   )
 
@@ -346,7 +354,27 @@ describe('App session bootstrap', () => {
               created_at: '2026-04-08T10:00:00Z',
               updated_at: '2026-04-08T11:00:00Z',
             },
-            messages: [],
+            messages: [
+              {
+                id: 'message-1',
+                session_id: 'session-newest',
+                role: 'assistant',
+                type: 'interrupt',
+                content: '请确认 PPT 信息',
+                payload: {
+                  type: 'edit',
+                  title: '请确认 PPT 信息',
+                  payload: {
+                    target_audience: '导师',
+                    user_role: '学生',
+                    num_pages: 12,
+                    theme: 'DeepSeek 论文汇报',
+                    layout_style: 'top_bottom',
+                  },
+                },
+                created_at: '2026-04-08T11:00:00Z',
+              },
+            ],
             pending_interrupt: {
               id: 'interrupt-1',
               session_id: 'session-newest',
@@ -437,7 +465,26 @@ describe('App session bootstrap', () => {
                 created_at: '2026-04-08T08:00:00Z',
                 updated_at: '2026-04-08T10:00:00Z',
               },
-              messages: [],
+              messages: [
+                {
+                  id: 'message-a',
+                  session_id: 'session-a',
+                  role: 'assistant',
+                  type: 'interrupt',
+                  content: 'Alpha Interrupt',
+                  payload: {
+                    type: 'edit',
+                    title: 'Alpha Interrupt',
+                    payload: {
+                      target_audience: '导师',
+                      user_role: '学生',
+                      num_pages: 10,
+                      theme: 'Alpha Theme',
+                      layout_style: 'top_bottom',
+                    },
+                  },
+                },
+              ],
               pending_interrupt: {
                 id: 'interrupt-a',
                 session_id: 'session-a',
@@ -510,7 +557,7 @@ describe('App session bootstrap', () => {
       ),
     )
 
-    expect(await screen.findByText('输出结果')).toBeInTheDocument()
+    expect((await screen.findAllByText('Beta Session')).length).toBeGreaterThan(0)
     expect(screen.queryByText(/Alpha Interrupt/)).not.toBeInTheDocument()
   })
 })
