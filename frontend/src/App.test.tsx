@@ -287,7 +287,7 @@ describe('App session bootstrap', () => {
     vi.restoreAllMocks()
   })
 
-  it('loads the session list and shows the active session title from session detail', async () => {
+  it('selects the most recently updated session on bootstrap and loads its detail', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
 
@@ -295,20 +295,20 @@ describe('App session bootstrap', () => {
         return new Response(
           JSON.stringify([
             {
-              id: 'session-newest',
-              title: 'Newest Session',
-              status: 'interrupted',
-              stage: 'awaiting_ppt_info',
-              created_at: '2026-04-08T10:00:00Z',
-              updated_at: '2026-04-08T11:00:00Z',
-            },
-            {
               id: 'session-older',
               title: 'Older Session',
               status: 'completed',
               stage: 'completed',
               created_at: '2026-04-08T08:00:00Z',
               updated_at: '2026-04-08T09:00:00Z',
+            },
+            {
+              id: 'session-newest',
+              title: 'Newest Session',
+              status: 'interrupted',
+              stage: 'awaiting_ppt_info',
+              created_at: '2026-04-08T10:00:00Z',
+              updated_at: '2026-04-08T11:00:00Z',
             },
           ]),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -365,6 +365,7 @@ describe('App session bootstrap', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8000/api/sessions', expect.anything())
       expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8000/api/sessions/session-newest', expect.anything())
+      expect(fetchMock).not.toHaveBeenCalledWith('http://127.0.0.1:8000/api/sessions/session-older', expect.anything())
     })
   })
 })

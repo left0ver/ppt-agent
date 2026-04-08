@@ -262,9 +262,10 @@ function App() {
     const bootstrap = async () => {
       try {
         const result = await listSessions()
+        const sortedSessions = sortSessionsByUpdatedAt(result)
         if (cancelled) return
-        setSessions(result)
-        setActiveSessionId((current) => current ?? result[0]?.id ?? null)
+        setSessions(sortedSessions)
+        setActiveSessionId((current) => current ?? sortedSessions[0]?.id ?? null)
       } catch (error) {
         if (cancelled) return
         const errorMessage = error instanceof Error ? error.message : '加载会话列表失败'
