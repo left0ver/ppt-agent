@@ -1,6 +1,7 @@
 import { EditOutlined } from '@ant-design/icons'
 import { Sender } from '@ant-design/x'
-import { Button, Card, Tag, Typography } from 'antd'
+import { Button, Card, Input, Tag, Typography } from 'antd'
+import { useEffect, useState } from 'react'
 import InterruptCard from './InterruptCard'
 import type { SessionMessage, SessionStage, SessionStatus } from '../types'
 
@@ -17,7 +18,7 @@ interface ChatThreadProps {
   pendingInterruptId: string | null
   requirement: string
   onRequirementChange: (value: string) => void
-  onRename: () => void
+  onRename: (title: string) => void
   onSend: () => void
   onSubmitInterrupt: (messageId: string, payload: unknown) => void
 }
@@ -64,6 +65,8 @@ export function ChatThread({
   onSend,
   onSubmitInterrupt,
 }: ChatThreadProps) {
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [draftTitle, setDraftTitle] = useState(sessionTitle)
   const hasPendingInterrupt = Boolean(pendingInterruptId)
   const senderDisabled =
     !hasActiveSession || loading || hasPendingInterrupt || sessionStatus === 'running'
@@ -75,12 +78,45 @@ export function ChatThread({
       ? '当前会话正在处理中'
       : '输入消息，Enter 发送'
 
+  useEffect(() => {
+    setDraftTitle(sessionTitle)
+  }, [sessionTitle])
+
+  const commitRename = () => {
+    const nextTitle = draftTitle.trim()
+    setEditingTitle(false)
+    if (!nextTitle) {
+      setDraftTitle(sessionTitle)
+      return
+    }
+    if (nextTitle !== sessionTitle) {
+      onRename(nextTitle)
+      return
+    }
+    setDraftTitle(sessionTitle)
+  }
+
   return (
     <Card className="chat-card" bordered={false}>
       <div className="chat-thread__header">
         <div>
           <p className="chat-thread__eyebrow">Session</p>
-          <Title level={3}>{sessionTitle}</Title>
+          {editingTitle ? (
+            <Input
+              className="chat-thread__title-input"
+              value={draftTitle}
+              autoFocus
+              onChange={(event) => setDraftTitle(event.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  commitRename()
+                }
+              }}
+            />
+          ) : (
+            <Title level={3}>{sessionTitle}</Title>
+          )}
           <Paragraph className="chat-thread__subtitle">
             <Tag color={sessionStatus === 'failed' ? 'error' : sessionStatus === 'completed' ? 'success' : 'processing'}>
               {sessionStatus}
@@ -88,7 +124,14 @@ export function ChatThread({
             <Text type="secondary">{sessionStage}</Text>
           </Paragraph>
         </div>
-        <Button type="text" icon={<EditOutlined />} onClick={onRename}>
+        <Button
+          type="text"
+          icon={<EditOutlined />}
+          onClick={() => {
+            setDraftTitle(sessionTitle)
+            setEditingTitle(true)
+          }}
+        >
           重命名
         </Button>
       </div>

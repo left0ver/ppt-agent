@@ -134,11 +134,29 @@ vi.mock('antd', async () => {
     value,
     onChange,
     placeholder,
+    onKeyDown,
+    onBlur,
+    disabled,
+    autoFocus,
   }: {
     value?: string
     onChange?: (event: { target: { value: string } }) => void
     placeholder?: string
-  }) => <input value={value ?? ''} placeholder={placeholder} onChange={(event) => onChange?.({ target: { value: event.target.value } })} />
+    onKeyDown?: (event: { key: string }) => void
+    onBlur?: () => void
+    disabled?: boolean
+    autoFocus?: boolean
+  }) => (
+    <input
+      value={value ?? ''}
+      placeholder={placeholder}
+      disabled={disabled}
+      autoFocus={autoFocus}
+      onChange={(event) => onChange?.({ target: { value: event.target.value } })}
+      onKeyDown={(event) => onKeyDown?.({ key: event.key })}
+      onBlur={() => onBlur?.()}
+    />
+  )
 
   const InputNumber = ({
     value,
@@ -171,7 +189,7 @@ vi.mock('antd', async () => {
     renderItem,
   }: {
     dataSource?: unknown[]
-    renderItem?: (item: any, index: number) => React.ReactNode
+    renderItem?: (item: unknown, index: number) => React.ReactNode
   }) => <div>{(dataSource ?? []).map((item, index) => <div key={index}>{renderItem?.(item, index)}</div>)}</div>
   List.Item = passthrough('List.Item')
 
@@ -559,5 +577,75 @@ describe('App session bootstrap', () => {
 
     expect((await screen.findAllByText('Beta Session')).length).toBeGreaterThan(0)
     expect(screen.queryByText(/Alpha Interrupt/)).not.toBeInTheDocument()
+  })
+
+  it('renames the active session title', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url.endsWith('/api/sessions') && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'session-rename',
+              title: '今天为什么要上班',
+              status: 'completed',
+              stage: 'completed',
+              created_at: '2026-04-08T08:00:00Z',
+              updated_at: '2026-04-08T09:00:00Z',
+            },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (url.endsWith('/api/sessions/session-rename') && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify({
+            session: {
+              id: 'session-rename',
+              title: '今天为什么要上班',
+              status: 'completed',
+              stage: 'completed',
+              created_at: '2026-04-08T08:00:00Z',
+              updated_at: '2026-04-08T09:00:00Z',
+            },
+            messages: [],
+            pending_interrupt: null,
+            preview: {
+              first_draft_results: [],
+              final_ppt_results: [],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (url.endsWith('/api/sessions/session-rename') && init?.method === 'PATCH') {
+        return new Response(
+          JSON.stringify({
+            id: 'session-rename',
+            title: '新的标题',
+            status: 'completed',
+            stage: 'completed',
+            created_at: '2026-04-08T08:00:00Z',
+            updated_at: '2026-04-08T09:30:00Z',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '重命名' }))
+    fireEvent.change(screen.getByDisplayValue('今天为什么要上班'), { target: { value: '新的标题' } })
+    fireEvent.keyDown(screen.getByDisplayValue('新的标题'), { key: 'Enter' })
+
+    expect((await screen.findAllByText('新的标题')).length).toBeGreaterThan(0)
   })
 })

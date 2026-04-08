@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  FullscreenOutlined,
-  LayoutOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
 import { Sender } from '@ant-design/x'
@@ -9,30 +7,27 @@ import {
   Alert,
   App as AntApp,
   Button,
-  Card,
   Drawer,
   Empty,
-  Flex,
   Layout,
-  List,
   Modal,
   Select,
   Segmented,
   Space,
-  Tabs,
 } from 'antd'
-import type { TabsProps } from 'antd'
 import './App.css'
 import {
   createSession,
   getSessionDetail,
   listSessions,
   modifyPage,
+  renameSession,
   sendSessionMessage,
   uploadContentFiles,
   uploadTemplate,
 } from './api'
 import ChatThread from './components/ChatThread'
+import PreviewPanel from './components/PreviewPanel'
 import SessionSidebar from './components/SessionSidebar'
 import TopTimeline from './components/TopTimeline'
 import type {
@@ -106,19 +101,6 @@ function App() {
     () => previewList.find((item) => item.page === selectedPage) ?? previewList[0] ?? null,
     [previewList, selectedPage],
   )
-
-  const previewTabItems: TabsProps['items'] = [
-    {
-      key: 'first_draft',
-      label: '初稿',
-      children: null,
-    },
-    {
-      key: 'final_ppt',
-      label: '终稿',
-      children: null,
-    },
-  ]
 
   const applySessionDetail = (detail: SessionDetail) => {
     setSessionDetail(detail)
@@ -291,6 +273,24 @@ function App() {
       void message.error(errorMessage)
     } finally {
       setLoadingDetail(false)
+    }
+  }
+
+  const handleRenameSession = async (title: string) => {
+    if (!activeSessionId || !title.trim()) return
+
+    setActionLoading(true)
+    try {
+      const updated = await renameSession(activeSessionId, title.trim())
+      setSessions((current) => upsertSessionSummary(current, updated))
+      setSessionDetail((current) =>
+        current?.session.id === updated.id ? { ...current, session: updated } : current,
+      )
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '重命名会话失败'
+      void message.error(errorMessage)
+    } finally {
+      setActionLoading(false)
     }
   }
 
@@ -489,7 +489,7 @@ function App() {
               pendingInterruptId={activeSessionDetail?.pending_interrupt?.message_id ?? null}
               requirement={requirement}
               onRequirementChange={setRequirement}
-              onRename={() => undefined}
+              onRename={(title) => void handleRenameSession(title)}
               onSend={() => void handleStart()}
               onSubmitInterrupt={(messageId, payload) =>
                 void handleInterruptSubmit(messageId, payload)
@@ -499,77 +499,19 @@ function App() {
           </Content>
 
           <Sider width={420} className="right-panel">
-            <Card className="panel-card preview-panel" bordered={false}>
-              <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-                <Tabs
-                  activeKey={previewType}
-                  items={previewTabItems}
-                  onChange={(key) => setPreviewType(key as 'first_draft' | 'final_ppt')}
-                />
-                <Space>
-                  <Segmented
-                    value={previewMode}
-                    onChange={(value) => setPreviewMode(value as 'gallery' | 'single')}
-                    options={[
-                      { label: '缩略图视图', value: 'gallery' },
-                      { label: '单页视图', value: 'single' },
-                    ]}
-                  />
-                  <Button
-                    icon={<LayoutOutlined />}
-                    onClick={() => setModifyDrawerOpen(true)}
-                    disabled={previewList.length === 0}
-                  >
-                    修改
-                  </Button>
-                </Space>
-              </Flex>
-
-              {previewMode === 'gallery' ? (
-                <List
-                  className="preview-list"
-                  grid={{ gutter: 12, column: 2 }}
-                  dataSource={previewList}
-                  locale={{ emptyText: '暂无页面' }}
-                  renderItem={(item) => (
-                    <List.Item>
-                      <Card
-                        hoverable
-                        size="small"
-                        onClick={() => {
-                          setSelectedPage(item.page)
-                          setZoomOpen(true)
-                        }}
-                        title={`第 ${item.page} 页`}
-                        extra={<FullscreenOutlined />}
-                      >
-                        <div className="thumbnail-canvas" dangerouslySetInnerHTML={{ __html: item.svg_content ?? '' }} />
-                      </Card>
-                    </List.Item>
-                  )}
-                />
-              ) : (
-                <>
-                  <List
-                    className="page-selector"
-                    size="small"
-                    dataSource={previewList}
-                    locale={{ emptyText: '暂无页面' }}
-                    renderItem={(item) => (
-                      <List.Item
-                        onClick={() => setSelectedPage(item.page)}
-                        className={selectedPage === item.page ? 'page-selector-active' : ''}
-                      >
-                        第 {item.page} 页
-                      </List.Item>
-                    )}
-                  />
-                  <div className="preview-stage preview-stage-clickable" onClick={() => setZoomOpen(true)}>
-                    {renderSvg(selectedPreview)}
-                  </div>
-                </>
-              )}
-            </Card>
+            <PreviewPanel
+              previewList={previewList}
+              previewType={previewType}
+              previewMode={previewMode}
+              selectedPage={selectedPage}
+              selectedPreview={selectedPreview}
+              onChangeType={setPreviewType}
+              onChangeMode={setPreviewMode}
+              onSelectPage={setSelectedPage}
+              onModify={() => setModifyDrawerOpen(true)}
+              onOpenZoom={() => setZoomOpen(true)}
+              renderSvg={renderSvg}
+            />
           </Sider>
         </Layout>
       </Layout>

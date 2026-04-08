@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Alert, Button, Card, Input, InputNumber, Segmented, Space, Tag, Typography } from 'antd'
 import type { SessionMessage } from '../types'
 
@@ -95,14 +95,6 @@ export default function InterruptCard({
   const [contentUrls, setContentUrls] = useState([''])
   const [templateFile, setTemplateFile] = useState<File | null>(null)
   const [textValue, setTextValue] = useState('')
-
-  useEffect(() => {
-    setPptInfo(coercePptInfo(interrupt.payload))
-    setContentFiles([])
-    setContentUrls([''])
-    setTemplateFile(null)
-    setTextValue('')
-  }, [interrupt.kind, interrupt.payload, message.id])
 
   const acceptedLabel = getAcceptedLabel(interrupt.payload)
   const statusLabel = pending ? '待处理' : '已处理'
@@ -364,4 +356,3 @@ export default function InterruptCard({
     </Card>
   )
 }
-

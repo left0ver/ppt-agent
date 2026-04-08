@@ -19,7 +19,7 @@ export interface InterruptView {
   payload: unknown
 }
 
-export interface SessionData extends SessionPreview {}
+export type SessionData = SessionPreview
 
 export interface ApiResponse {
   thread_id: string

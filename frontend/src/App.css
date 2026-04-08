@@ -338,6 +338,10 @@
   margin-bottom: 0;
 }
 
+.chat-thread__title-input {
+  max-width: 420px;
+}
+
 .chat-thread__eyebrow {
   margin: 0 0 6px;
   font-size: 11px;
