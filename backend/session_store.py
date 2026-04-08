@@ -116,6 +116,31 @@ class SessionStore:
             raise SessionNotFoundError(session_id)
         return self._row_to_session(row)
 
+    def update_session(
+        self,
+        session_id: str,
+        *,
+        title: str | None = None,
+        status: str | None = None,
+        stage: str | None = None,
+    ) -> SessionRecord:
+        updated_at = now_iso()
+        cursor = self._connection.execute(
+            """
+            UPDATE sessions
+            SET title = COALESCE(?, title),
+                status = COALESCE(?, status),
+                stage = COALESCE(?, stage),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (title, status, stage, updated_at, session_id),
+        )
+        if cursor.rowcount == 0:
+            raise SessionNotFoundError(session_id)
+        self._connection.commit()
+        return self.get_session(session_id)
+
     def append_message(
         self,
         session_id: str,

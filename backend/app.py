@@ -320,23 +320,15 @@ def update_session_metadata(
     stage: str | None = None,
 ) -> StoredSessionRecord:
     active_store = get_active_store()
-    current = get_store_session(session_id)
-    active_store._connection.execute(
-        """
-        UPDATE sessions
-        SET title = ?, status = ?, stage = ?, updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            current.title if title is None else title,
-            current.status if status is None else status,
-            current.stage if stage is None else stage,
-            now_iso(),
+    try:
+        return active_store.update_session(
             session_id,
-        ),
-    )
-    active_store._connection.commit()
-    return get_store_session(session_id)
+            title=title,
+            status=status,
+            stage=stage,
+        )
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="session not found") from exc
 
 
 def get_runtime_session(session_id: str) -> RuntimeSessionRecord:

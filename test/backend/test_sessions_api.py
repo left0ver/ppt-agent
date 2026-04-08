@@ -132,3 +132,41 @@ def test_rename_session(tmp_path: Path) -> None:
     detail_response = client.get(f"/api/sessions/{session['id']}")
     assert detail_response.status_code == 200
     assert detail_response.json()["session"]["title"] == "Quarterly Business Review"
+
+
+def test_get_session_detail_missing_id_returns_404(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+
+    detail_response = client.get("/api/sessions/missing-session")
+
+    assert detail_response.status_code == 404
+    assert detail_response.json() == {"detail": "session not found"}
+
+
+def test_rename_session_rejects_whitespace_only_title(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    session = client.post("/api/sessions").json()
+
+    rename_response = client.patch(
+        f"/api/sessions/{session['id']}",
+        json={"title": "   "},
+    )
+
+    assert rename_response.status_code == 422
+
+
+def test_session_store_update_session_updates_only_provided_fields(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    session = store.create_session()
+
+    renamed = store.update_session(session.id, title="Renamed Session")
+    updated_state = store.update_session(session.id, status="running", stage="starting")
+
+    assert renamed.id == session.id
+    assert renamed.title == "Renamed Session"
+    assert renamed.status == session.status
+    assert renamed.stage == session.stage
+    assert updated_state.id == session.id
+    assert updated_state.title == "Renamed Session"
+    assert updated_state.status == "running"
+    assert updated_state.stage == "starting"
