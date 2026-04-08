@@ -28,9 +28,11 @@ from agent.modify_ppt import modify_ppt  # noqa: E402
 from backend.session_models import (  # noqa: E402
     PendingInterruptResponse,
     RenameSessionRequest,
+    SessionActionResponse,
     SessionDetailResponse,
     SessionMessageResponse,
     SessionSummaryResponse,
+    SubmitMessageRequest,
 )
 from backend.session_store import (  # noqa: E402
     MessageRecord as StoredMessageRecord,
@@ -333,20 +335,23 @@ def update_session_metadata(
 
 def get_runtime_session(session_id: str) -> RuntimeSessionRecord:
     session = ensure_session_exists(session_id)
+    pending_interrupt = get_active_store().get_pending_interrupt(session_id)
     return RuntimeSessionRecord(
         thread_id=session.id,
         status=session.status,
         stage=session.stage,
         created_at=session.created_at,
         updated_at=session.updated_at,
-        last_interrupt=_session_interrupt_state.get(session_id),
-        error=_session_error_state.get(session_id),
+        last_interrupt=build_interrupt_view(pending_interrupt),
+        error=get_latest_error_payload(session_id) if session.status == "failed" else None,
     )
 
 
 def save_runtime_session(record: RuntimeSessionRecord) -> RuntimeSessionRecord:
-    _session_interrupt_state[record.thread_id] = record.last_interrupt
-    _session_error_state[record.thread_id] = record.error
+    if record.error is None:
+        _session_error_state.pop(record.thread_id, None)
+    else:
+        _session_error_state[record.thread_id] = record.error
     updated = update_session_metadata(
         record.thread_id,
         status=record.status,
@@ -380,15 +385,134 @@ def map_session_message(record: StoredMessageRecord) -> SessionMessageResponse:
     )
 
 
+def map_pending_interrupt(record: Any) -> PendingInterruptResponse | None:
+    if record is None:
+        return None
+    return PendingInterruptResponse(
+        id=record.id,
+        session_id=record.session_id,
+        interrupt_type=record.interrupt_type,
+        title=record.title,
+        payload=record.payload,
+        status=record.status,
+        message_id=record.message_id,
+        created_at=record.created_at,
+        resolved_at=record.resolved_at,
+    )
+
+
 def map_session_detail(record: StoredSessionDetail) -> SessionDetailResponse:
     return SessionDetailResponse(
         session=map_session_summary(record.session),
         messages=[map_session_message(message) for message in record.messages],
-        pending_interrupt=PendingInterruptResponse.model_validate(record.pending_interrupt)
-        if record.pending_interrupt
-        else None,
+        pending_interrupt=map_pending_interrupt(record.pending_interrupt),
         preview=collect_generated_assets(record.session.id),
     )
+
+
+def map_session_action(record: StoredSessionDetail) -> SessionActionResponse:
+    return SessionActionResponse(
+        session=map_session_summary(record.session),
+        messages=[map_session_message(message) for message in record.messages],
+        pending_interrupt=map_pending_interrupt(record.pending_interrupt),
+        preview=collect_generated_assets(record.session.id),
+    )
+
+
+def build_interrupt_view(record: Any) -> dict[str, Any] | None:
+    if record is None:
+        return None
+    return {
+        "type": record.interrupt_type,
+        "title": record.title,
+        "payload": record.payload,
+    }
+
+
+def get_latest_error_payload(session_id: str) -> dict[str, Any] | None:
+    latest_message = get_active_store().get_latest_message(session_id)
+    if latest_message is None or latest_message.type != "error":
+        return _session_error_state.get(session_id)
+    if isinstance(latest_message.payload, dict) and latest_message.payload.get("message"):
+        return {"message": str(latest_message.payload["message"])}
+    if latest_message.content:
+        return {"message": latest_message.content}
+    return _session_error_state.get(session_id)
+
+
+def append_assistant_message(
+    session_id: str,
+    *,
+    type: str,
+    content: str | None,
+    payload: Any = None,
+) -> StoredMessageRecord:
+    return get_active_store().append_message(
+        session_id=session_id,
+        role="assistant",
+        type=type,
+        content=content,
+        payload=payload,
+    )
+
+
+def completion_message_for(raw_response: Any) -> str:
+    if isinstance(raw_response, dict):
+        response_content = raw_response.get("response_content")
+        if isinstance(response_content, str) and response_content.strip():
+            return response_content.strip()
+    return "Workflow completed."
+
+
+def persist_workflow_result(session_id: str, raw_response: Any) -> StoredSessionDetail:
+    active_store = get_active_store()
+    interrupt_payload = raw_response.get("__interrupt__") if isinstance(raw_response, dict) else None
+    if interrupt_payload:
+        normalized_interrupt = normalize_interrupt_payload(interrupt_payload)
+        interrupt_response = build_interrupt_response(normalized_interrupt)
+        interrupt_message = append_assistant_message(
+            session_id,
+            type="interrupt",
+            content=interrupt_response["title"],
+            payload=interrupt_response,
+        )
+        active_store.upsert_pending_interrupt(
+            session_id=session_id,
+            interrupt_type=interrupt_response["type"],
+            title=interrupt_response["title"],
+            payload=interrupt_response["payload"],
+            message_id=interrupt_message.id,
+        )
+        active_store.update_session(
+            session_id,
+            status="interrupted",
+            stage=map_interrupt_to_stage(normalized_interrupt),
+        )
+    else:
+        active_store.resolve_interrupt(session_id, status="resolved")
+        active_store.update_session(session_id, status="completed", stage="completed")
+        append_assistant_message(
+            session_id,
+            type="status",
+            content=completion_message_for(raw_response),
+            payload=raw_response if isinstance(raw_response, dict) and raw_response else None,
+        )
+    _session_error_state.pop(session_id, None)
+    return active_store.get_session_detail(session_id)
+
+
+def persist_workflow_error(session_id: str, exc: Exception) -> StoredSessionDetail:
+    message = str(exc)
+    active_store = get_active_store()
+    active_store.update_session(session_id, status="failed", stage="failed")
+    append_assistant_message(
+        session_id,
+        type="error",
+        content=message,
+        payload={"message": message},
+    )
+    _session_error_state[session_id] = {"message": message}
+    return active_store.get_session_detail(session_id)
 
 
 def build_api_response(record: RuntimeSessionRecord, data: Any = None) -> ApiResponse:
@@ -413,23 +537,8 @@ def build_api_response(record: RuntimeSessionRecord, data: Any = None) -> ApiRes
 
 
 def adapt_agent_response(thread_id: str, raw_response: dict[str, Any]) -> ApiResponse:
-    record = get_runtime_session(thread_id)
-    interrupt_payload = raw_response.get("__interrupt__")
-    if interrupt_payload:
-        normalized_interrupt = normalize_interrupt_payload(interrupt_payload)
-        record.status = "interrupted"
-        record.stage = map_interrupt_to_stage(normalized_interrupt)
-        record.last_interrupt = build_interrupt_response(normalized_interrupt)
-        record.error = None
-        save_runtime_session(record)
-        return build_api_response(record)
-
-    record.status = "completed"
-    record.stage = "completed"
-    record.last_interrupt = None
-    record.error = None
-    save_runtime_session(record)
-    return build_api_response(record)
+    persist_workflow_result(thread_id, raw_response)
+    return build_api_response(get_runtime_session(thread_id))
 
 
 async def run_generation(thread_id: str, action: str, payload: Any) -> ApiResponse:
@@ -440,16 +549,59 @@ async def run_generation(thread_id: str, action: str, payload: Any) -> ApiRespon
     save_runtime_session(record)
     try:
         if action == "starting":
-            raw_response =await start_workflow(InputSchema(ppt_requirement=payload), thread_id)
+            raw_response = await start_workflow(InputSchema(ppt_requirement=payload), thread_id)
         else:
             raw_response = await resume_workflow(thread_id, payload)
         return adapt_agent_response(thread_id, raw_response)
     except Exception as exc:  # noqa: BLE001
-        record.status = "failed"
-        record.stage = "failed"
-        record.error = {"message": str(exc)}
-        save_runtime_session(record)
-        return build_api_response(record)
+        persist_workflow_error(thread_id, exc)
+        return build_api_response(get_runtime_session(thread_id))
+
+
+def save_content_files_for_session(session_id: str, files: list[UploadFile]) -> dict[str, Any]:
+    ensure_session_exists(session_id)
+    saved_files: list[dict[str, Any]] = []
+    allowed_extensions = {".pdf", ".docx", ".markdown", ".md"}
+    context_dir = ensure_session_dirs(session_id) / "context_files"
+    for upload in files:
+        suffix = Path(upload.filename or "").suffix.lower()
+        if suffix not in allowed_extensions:
+            raise HTTPException(status_code=400, detail=f"unsupported content file: {upload.filename}")
+        safe_name = sanitize_filename(upload.filename or "upload.bin")
+        destination = context_dir / safe_name
+        write_upload_file(upload, destination)
+        saved_files.append({"name": safe_name, "path": str(destination)})
+    return {"thread_id": session_id, "files": saved_files}
+
+
+def save_template_file_for_session(session_id: str, file: UploadFile) -> dict[str, Any]:
+    ensure_session_exists(session_id)
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".ppt", ".pptx"}:
+        raise HTTPException(status_code=400, detail="template only supports .ppt or .pptx")
+    template_dir = ensure_session_dirs(session_id) / "template"
+    destination = template_dir / f"template{suffix}"
+    for old_file in template_dir.glob("template.*"):
+        old_file.unlink()
+    write_upload_file(file, destination)
+    return {"thread_id": session_id, "file": {"name": destination.name, "path": str(destination)}}
+
+
+def require_text_message(request: SubmitMessageRequest) -> str:
+    if request.type != "text":
+        raise HTTPException(status_code=409, detail="session is not waiting for an interrupt response")
+    content = (request.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="content is required for text messages")
+    return content
+
+
+def require_interrupt_response(request: SubmitMessageRequest) -> Any:
+    if request.type != "interrupt_response":
+        raise HTTPException(status_code=409, detail="pending interrupt requires an interrupt response")
+    if request.payload is None:
+        raise HTTPException(status_code=422, detail="payload is required for interrupt responses")
+    return request.payload
 
 
 app = FastAPI(title="PPT Agent API", version="0.1.0")
@@ -496,6 +648,62 @@ def rename_session(session_id: str, request: RenameSessionRequest) -> SessionSum
     return map_session_summary(renamed)
 
 
+@app.post("/api/sessions/{session_id}/messages", response_model=SessionActionResponse)
+async def submit_session_message(
+    session_id: str,
+    request: SubmitMessageRequest,
+) -> SessionActionResponse:
+    ensure_session_exists(session_id)
+    active_store = get_active_store()
+    pending_interrupt = active_store.get_pending_interrupt(session_id)
+
+    try:
+        if pending_interrupt is None:
+            content = require_text_message(request)
+            active_store.append_message(
+                session_id=session_id,
+                role="user",
+                type="text",
+                content=content,
+            )
+            active_store.update_session(session_id, status="running", stage="starting")
+            raw_response = await start_workflow(InputSchema(ppt_requirement=content), session_id)
+        else:
+            payload = require_interrupt_response(request)
+            active_store.append_message(
+                session_id=session_id,
+                role="user",
+                type="interrupt_response",
+                content=(request.content or pending_interrupt.title or "").strip() or None,
+                payload=payload,
+            )
+            active_store.update_session(session_id, status="running")
+            raw_response = await resume_workflow(session_id, payload)
+        detail = persist_workflow_result(session_id, raw_response)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        detail = persist_workflow_error(session_id, exc)
+
+    return map_session_action(detail)
+
+
+@app.post("/api/sessions/{session_id}/attachments/content-files")
+def upload_session_content_files(
+    session_id: str,
+    files: list[UploadFile] = File(default_factory=list),
+) -> dict[str, Any]:
+    return save_content_files_for_session(session_id, files)
+
+
+@app.post("/api/sessions/{session_id}/attachments/template")
+def upload_session_template_file(
+    session_id: str,
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    return save_template_file_for_session(session_id, file)
+
+
 @app.post("/api/ppt/start", response_model=ApiResponse)
 async def start_ppt_generation(request: StartRequest) -> ApiResponse:
     return await run_generation(request.thread_id, "starting", request.ppt_requirement)
@@ -514,19 +722,7 @@ async def resume_ppt_info(request: ResumePptInfoRequest) -> ApiResponse:
 def upload_content_files(
     thread_id: str = Form(...), files: list[UploadFile] = File(default_factory=list)
 ) -> dict[str, Any]:
-    ensure_session_exists(thread_id)
-    saved_files: list[dict[str, Any]] = []
-    allowed_extensions = {".pdf", ".docx", ".markdown", ".md"}
-    context_dir = ensure_session_dirs(thread_id) / "context_files"
-    for upload in files:
-        suffix = Path(upload.filename or "").suffix.lower()
-        if suffix not in allowed_extensions:
-            raise HTTPException(status_code=400, detail=f"unsupported content file: {upload.filename}")
-        safe_name = sanitize_filename(upload.filename or "upload.bin")
-        destination = context_dir / safe_name
-        write_upload_file(upload, destination)
-        saved_files.append({"name": safe_name, "path": str(destination)})
-    return {"thread_id": thread_id, "files": saved_files}
+    return save_content_files_for_session(thread_id, files)
 
 
 @app.post("/api/ppt/resume/content-sources", response_model=ApiResponse)
@@ -542,16 +738,7 @@ async def resume_content_sources(request: ResumeContentSourcesRequest) -> ApiRes
 def upload_template_file(
     thread_id: str = Form(...), file: UploadFile = File(...)
 ) -> dict[str, Any]:
-    ensure_session_exists(thread_id)
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in {".ppt", ".pptx"}:
-        raise HTTPException(status_code=400, detail="template only supports .ppt or .pptx")
-    template_dir = ensure_session_dirs(thread_id) / "template"
-    destination = template_dir / f"template{suffix}"
-    for old_file in template_dir.glob("template.*"):
-        old_file.unlink()
-    write_upload_file(file, destination)
-    return {"thread_id": thread_id, "file": {"name": destination.name, "path": str(destination)}}
+    return save_template_file_for_session(thread_id, file)
 
 
 @app.post("/api/ppt/resume/template", response_model=ApiResponse)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,19 @@ class PendingInterruptResponse(BaseModel):
 
 
 class SessionDetailResponse(BaseModel):
+    session: SessionSummaryResponse
+    messages: list[SessionMessageResponse]
+    pending_interrupt: PendingInterruptResponse | None
+    preview: dict[str, Any]
+
+
+class SubmitMessageRequest(BaseModel):
+    type: Literal["text", "interrupt_response"]
+    content: str | None = None
+    payload: Any = None
+
+
+class SessionActionResponse(BaseModel):
     session: SessionSummaryResponse
     messages: list[SessionMessageResponse]
     pending_interrupt: PendingInterruptResponse | None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 
@@ -66,6 +67,8 @@ from backend.session_store import SessionStore
 def make_client(tmp_path: Path) -> TestClient:
     app_module.store = SessionStore(tmp_path / "sessions.sqlite3")
     app_module.USER_DATA_DIR = tmp_path / "user_data"
+    app_module._session_interrupt_state.clear()
+    app_module._session_error_state.clear()
     return TestClient(app_module.app)
 
 
@@ -170,3 +173,167 @@ def test_session_store_update_session_updates_only_provided_fields(tmp_path: Pat
     assert updated_state.title == "Renamed Session"
     assert updated_state.status == "running"
     assert updated_state.stage == "starting"
+
+
+def test_submit_first_message_starts_workflow_and_persists_interrupt(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    client = make_client(tmp_path)
+    session = client.post("/api/sessions").json()
+    calls: dict[str, Any] = {}
+
+    async def fake_start_workflow(input_schema: InputSchema, thread_id: str) -> dict[str, object]:
+        calls["input"] = input_schema.kwargs
+        calls["thread_id"] = thread_id
+        return {
+            "__interrupt__": {
+                "type": "upload_ppt_content_files",
+                "title": "Upload supporting documents",
+                "values": {"accepted_types": [".pdf", ".md"]},
+            }
+        }
+
+    monkeypatch.setattr(app_module, "start_workflow", fake_start_workflow)
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={"type": "text", "content": "Build a QBR deck for the board meeting."},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert calls == {
+        "input": {"ppt_requirement": "Build a QBR deck for the board meeting."},
+        "thread_id": session["id"],
+    }
+    assert body["session"]["id"] == session["id"]
+    assert body["session"]["status"] == "interrupted"
+    assert body["session"]["stage"] == "awaiting_content_sources"
+    assert [message["role"] for message in body["messages"]] == ["user", "assistant"]
+    assert [message["type"] for message in body["messages"]] == ["text", "interrupt"]
+    assert body["messages"][0]["content"] == "Build a QBR deck for the board meeting."
+    assert body["messages"][1]["content"] == "Upload supporting documents"
+    assert body["messages"][1]["payload"] == {
+        "type": "upload_ppt_content_files",
+        "title": "Upload supporting documents",
+        "payload": {"accepted_types": [".pdf", ".md"]},
+    }
+    assert body["pending_interrupt"] == {
+        "id": body["pending_interrupt"]["id"],
+        "session_id": session["id"],
+        "interrupt_type": "upload_ppt_content_files",
+        "title": "Upload supporting documents",
+        "payload": {"accepted_types": [".pdf", ".md"]},
+        "status": "pending",
+        "message_id": body["messages"][1]["id"],
+        "created_at": body["pending_interrupt"]["created_at"],
+        "resolved_at": None,
+    }
+
+    persisted = client.get(f"/api/sessions/{session['id']}")
+    assert persisted.status_code == 200
+    assert persisted.json()["messages"] == body["messages"]
+    assert persisted.json()["pending_interrupt"] == body["pending_interrupt"]
+
+
+def test_submit_interrupt_response_resumes_workflow_and_clears_pending_interrupt(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    client = make_client(tmp_path)
+    session = client.post("/api/sessions").json()
+    calls: dict[str, Any] = {}
+
+    async def fake_start_workflow(input_schema: InputSchema, thread_id: str) -> dict[str, object]:
+        calls["start_input"] = input_schema.kwargs
+        calls["start_thread_id"] = thread_id
+        return {
+            "__interrupt__": {
+                "type": "input",
+                "title": "Choose the final style",
+                "values": {"options": ["clean", "bold"]},
+            }
+        }
+
+    async def fake_resume_workflow(thread_id: str, payload: dict[str, object]) -> dict[str, object]:
+        calls["resume_thread_id"] = thread_id
+        calls["resume_payload"] = payload
+        return {}
+
+    monkeypatch.setattr(app_module, "start_workflow", fake_start_workflow)
+    monkeypatch.setattr(app_module, "resume_workflow", fake_resume_workflow)
+
+    first_response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={"type": "text", "content": "Create an investor update deck."},
+    )
+
+    assert first_response.status_code == 200
+    assert first_response.json()["pending_interrupt"]["interrupt_type"] == "input"
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={
+            "type": "interrupt_response",
+            "payload": {"selected_style": "clean", "audience": "investors"},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert calls["resume_thread_id"] == session["id"]
+    assert calls["resume_payload"] == {"selected_style": "clean", "audience": "investors"}
+    assert body["session"]["status"] == "completed"
+    assert body["session"]["stage"] == "completed"
+    assert body["pending_interrupt"] is None
+    assert [message["type"] for message in body["messages"]] == [
+        "text",
+        "interrupt",
+        "interrupt_response",
+        "status",
+    ]
+    assert body["messages"][2]["role"] == "user"
+    assert body["messages"][2]["payload"] == {"selected_style": "clean", "audience": "investors"}
+    assert body["messages"][3]["role"] == "assistant"
+    assert body["messages"][3]["content"]
+
+    persisted = client.get(f"/api/sessions/{session['id']}")
+    assert persisted.status_code == 200
+    detail = persisted.json()
+    assert detail["session"] == body["session"]
+    assert detail["messages"] == body["messages"]
+    assert detail["pending_interrupt"] is None
+
+
+def test_upload_attachments_use_session_routes_without_advancing_workflow(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    session = client.post("/api/sessions").json()
+
+    content_response = client.post(
+        f"/api/sessions/{session['id']}/attachments/content-files",
+        files=[
+            (
+                "files",
+                ("context.md", b"# Notes", "text/markdown"),
+            )
+        ],
+    )
+    template_response = client.post(
+        f"/api/sessions/{session['id']}/attachments/template",
+        files={"file": ("template.pptx", b"pptx-bytes", "application/vnd.ms-powerpoint")},
+    )
+
+    assert content_response.status_code == 200
+    assert template_response.status_code == 200
+    assert content_response.json()["thread_id"] == session["id"]
+    assert content_response.json()["files"][0]["name"] == "context.md"
+    assert template_response.json()["thread_id"] == session["id"]
+    assert template_response.json()["file"]["name"] == "template.pptx"
+
+    detail = client.get(f"/api/sessions/{session['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["session"]["status"] == "idle"
+    assert detail.json()["session"]["stage"] == "idle"
+    assert detail.json()["messages"] == []
+    assert detail.json()["pending_interrupt"] is None

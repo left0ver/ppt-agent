@@ -233,12 +233,29 @@ class SessionStore:
                    created_at, resolved_at
             FROM session_interrupts
             WHERE session_id = ? AND status = 'pending'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
             """,
             (session_id,),
         ).fetchone()
         if row is None:
             return None
         return self._row_to_interrupt(row)
+
+    def get_latest_message(self, session_id: str) -> MessageRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT id, session_id, role, type, content, payload_json, created_at
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_message(row)
 
     def resolve_interrupt(self, session_id: str, status: str = "resolved") -> None:
         updated = self._resolve_pending_interrupt_rows(session_id, status=status)
