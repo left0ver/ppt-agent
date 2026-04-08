@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  BellOutlined,
   CloudDownloadOutlined,
   EyeOutlined,
   FilePptOutlined,
@@ -14,10 +13,8 @@ import { Bubble, Prompts, Sender } from '@ant-design/x'
 import {
   Alert,
   App as AntApp,
-  Avatar,
   Button,
   Card,
-  Descriptions,
   Divider,
   Drawer,
   Empty,
@@ -32,7 +29,6 @@ import {
   Segmented,
   Space,
   Spin,
-  Steps,
   Tabs,
   Tag,
   Typography,
@@ -51,6 +47,8 @@ import {
   uploadTemplate,
 } from './api'
 import { exportSlidesToPptx } from './pptExport'
+import SessionSidebar from './components/SessionSidebar'
+import TopTimeline from './components/TopTimeline'
 import type {
   PreviewResult,
   SessionDetail,
@@ -60,7 +58,7 @@ import type {
   SessionSummary,
 } from './types'
 
-const { Header, Sider, Content } = Layout
+const { Sider, Content } = Layout
 const { Dragger } = Upload
 const { Paragraph, Text, Title } = Typography
 
@@ -80,16 +78,6 @@ const promptSamples = [
   '帮我生成一份企业内训课件，主题是知识库和智能体落地',
 ]
 
-const stepItems = [
-  { key: 'requirement', label: '需求输入' },
-  { key: 'ppt_info', label: '信息确认' },
-  { key: 'content', label: '资料来源' },
-  { key: 'template', label: '模板上传' },
-  { key: 'first_draft', label: '初稿生成' },
-  { key: 'style', label: '风格确认' },
-  { key: 'final', label: '终稿完成' },
-]
-
 const emptyPreview: SessionPreview = {
   first_draft_results: [],
   final_ppt_results: [],
@@ -101,16 +89,6 @@ const defaultPptInfoDraft: PptInfoDraft = {
   num_pages: 10,
   theme: '',
   layout_style: 'top_bottom',
-}
-
-const stageToStepIndex = (stage: string, hasFirstDraft: boolean, hasFinalDraft: boolean) => {
-  if (hasFinalDraft || stage === 'completed') return 6
-  if (stage === 'awaiting_final_style') return 5
-  if (hasFirstDraft) return 4
-  if (stage === 'awaiting_template' || stage === 'generating_outline') return 3
-  if (stage === 'awaiting_content_sources') return 2
-  if (stage === 'awaiting_ppt_info') return 1
-  return 0
 }
 
 function sortSessionsByUpdatedAt(items: SessionSummary[]): SessionSummary[] {
@@ -207,11 +185,6 @@ function App() {
   const canModifyFinalDraft = finalDraftCount > 0
   const availableModifyType = canModifyFinalDraft ? '终稿' : '初稿'
   const errorMessage = extractErrorMessage(activeSessionDetail)
-  const stepIndex = stageToStepIndex(
-    activeSession?.stage ?? 'idle',
-    firstDraftCount > 0,
-    finalDraftCount > 0,
-  )
 
   const bubbleItems = useMemo(
     () =>
@@ -763,15 +736,6 @@ function App() {
   const renderEmptyPanel = () => (
     <Card className="work-card" title="还没有活动会话">
       <Empty description="先创建一个会话，再开始输入需求。" />
-      <Button
-        style={{ marginTop: 16 }}
-        type="primary"
-        icon={<PlusOutlined />}
-        onClick={() => void handleCreateSession()}
-        loading={actionLoading}
-      >
-        新建会话
-      </Button>
     </Card>
   )
 
@@ -804,195 +768,176 @@ function App() {
 
   return (
     <Layout className="app-shell">
-      <Header className="app-header">
-        <Flex justify="space-between" align="center" gap={16} wrap>
-          <Space size={16} align="center">
-            <Avatar size={44} className="brand-avatar" icon={<BellOutlined />} />
+      <Sider width={320} className="app-shell__sidebar">
+        <SessionSidebar
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          loading={loadingSessions}
+          creating={actionLoading}
+          onCreateSession={() => void handleCreateSession()}
+          onSelectSession={setActiveSessionId}
+        />
+      </Sider>
+
+      <Layout className="workspace-shell">
+        <div className="workspace-shell__top">
+          <div className="workspace-shell__meta">
             <div>
-              <Title level={4} style={{ margin: 0 }}>
-                PPT Agent 工作台
+              <p className="workspace-shell__eyebrow">PPT Agent Workspace</p>
+              <Title level={3} style={{ margin: 0 }}>
+                {activeSession?.title ?? '多会话 PPT 工作区'}
               </Title>
               <Text type="secondary">
-                {activeSession?.title ?? '会话驱动的 PPT 生成与修改'}
+                {activeSession?.stage ?? 'idle'} · API {getApiBaseUrl()}
               </Text>
             </div>
-          </Space>
-          <Space wrap>
-            <Tag
-              color={
-                activeSession?.status === 'completed'
-                  ? 'success'
-                  : activeSession?.status === 'failed'
-                    ? 'error'
-                    : 'processing'
-              }
-            >
-              {activeSession?.status ?? 'idle'}
-            </Tag>
-            <Tag>{activeSessionId ?? '未选择会话'}</Tag>
-            <Button icon={<ReloadOutlined />} onClick={() => void handleRefreshActiveSession()} disabled={!activeSessionId}>
-              刷新
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => void handleCreateSession()} loading={actionLoading}>
-              新建会话
-            </Button>
-          </Space>
-        </Flex>
-      </Header>
-
-      <Layout className="app-body">
-        <Sider width={300} className="left-panel">
-          <Card className="panel-card" bordered={false} title="会话列表">
-            {loadingSessions && sessions.length === 0 ? (
-              <Spin />
-            ) : sessions.length === 0 ? (
-              <Empty description="还没有会话" />
-            ) : (
-              <List
-                dataSource={sessions}
-                renderItem={(item) => (
-                  <List.Item
-                    onClick={() => setActiveSessionId(item.id)}
-                    className={item.id === activeSessionId ? 'page-selector-active' : ''}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <Space direction="vertical" size={0}>
-                      <Text strong={item.id === activeSessionId}>{item.title}</Text>
-                      <Text type="secondary">
-                        {item.stage} · {item.updated_at}
-                      </Text>
-                    </Space>
-                  </List.Item>
-                )}
-              />
-            )}
-          </Card>
-          <Card className="panel-card" bordered={false}>
-            <Steps current={stepIndex} direction="vertical" items={stepItems.map((item) => ({ title: item.label }))} />
-          </Card>
-          <Card className="panel-card" bordered={false} title="当前会话信息">
-            <Descriptions column={1} size="small">
-              <Descriptions.Item label="标题">{activeSession?.title ?? '未选择'}</Descriptions.Item>
-              <Descriptions.Item label="状态">{activeSession?.status ?? 'idle'}</Descriptions.Item>
-              <Descriptions.Item label="阶段">{activeSession?.stage ?? 'idle'}</Descriptions.Item>
-              <Descriptions.Item label="初稿页数">{firstDraftCount}</Descriptions.Item>
-              <Descriptions.Item label="终稿页数">{finalDraftCount}</Descriptions.Item>
-              <Descriptions.Item label="API">{getApiBaseUrl()}</Descriptions.Item>
-            </Descriptions>
-          </Card>
-        </Sider>
-
-        <Content className="center-panel">
-          <Card className="chat-card" bordered={false}>
-            <div className="chat-history">
-              <Bubble.List
-                items={
-                  bubbleItems.length > 0
-                    ? bubbleItems
-                    : [
-                        {
-                          key: 'empty',
-                          content: '欢迎使用 PPT Agent，先选择一个会话，再在下方输入需求。',
-                          placement: 'start',
-                          avatar: { children: 'AI' },
-                        },
-                      ]
+            <Space wrap>
+              <Tag
+                color={
+                  activeSession?.status === 'completed'
+                    ? 'success'
+                    : activeSession?.status === 'failed'
+                      ? 'error'
+                      : 'processing'
                 }
-              />
-            </div>
-            {activeSessionDetail?.pending_interrupt ? (
-              <Alert
-                style={{ marginBottom: 16 }}
-                type="info"
-                showIcon
-                message={activeSessionDetail.pending_interrupt.title}
-                description="当前会话存在待处理的中断，下面的表单会根据阶段提交结构化响应。"
-              />
-            ) : null}
-            {renderMainPanel()}
-            <div className="sender-wrap">
-              <Sender
-                value={requirement}
-                onChange={setRequirement}
-                onSubmit={() => void handleStart()}
-                loading={actionLoading && (activeSession?.stage === 'starting' || activeSession?.stage === 'idle')}
-                placeholder="输入消息，Enter 发送"
-                prefix={<Tag bordered={false}>{activeSession ? '发送到当前会话' : '先创建会话'}</Tag>}
-                disabled={!activeSessionId || activeSession?.stage !== 'idle'}
-              />
-            </div>
-          </Card>
-        </Content>
+              >
+                {activeSession?.status ?? 'idle'}
+              </Tag>
+              <Tag>{activeSessionId ?? '未选择会话'}</Tag>
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={() => void handleRefreshActiveSession()}
+                disabled={!activeSessionId}
+              >
+                刷新
+              </Button>
+            </Space>
+          </div>
 
-        <Sider width={420} className="right-panel">
-          <Card className="panel-card preview-panel" bordered={false}>
-            <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-              <Tabs
-                activeKey={previewType}
-                items={previewTabItems}
-                onChange={(key) => setPreviewType(key as 'first_draft' | 'final_ppt')}
-              />
-              <Space>
-                <Segmented
-                  value={previewMode}
-                  onChange={(value) => setPreviewMode(value as 'gallery' | 'single')}
-                  options={[
-                    { label: '缩略图视图', value: 'gallery' },
-                    { label: '单页视图', value: 'single' },
-                  ]}
+          <TopTimeline
+            stage={activeSession?.stage ?? 'idle'}
+            firstDraftCount={firstDraftCount}
+            finalDraftCount={finalDraftCount}
+          />
+        </div>
+
+        <Layout className="workspace-body">
+          <Content className="center-panel">
+            <Card className="chat-card" bordered={false}>
+              <div className="chat-history">
+                <Bubble.List
+                  items={
+                    bubbleItems.length > 0
+                      ? bubbleItems
+                      : [
+                          {
+                            key: 'empty',
+                            content: '欢迎使用 PPT Agent，先选择一个会话，再在下方输入需求。',
+                            placement: 'start',
+                            avatar: { children: 'AI' },
+                          },
+                        ]
+                  }
                 />
-                <Button icon={<LayoutOutlined />} onClick={() => setModifyDrawerOpen(true)} disabled={previewList.length === 0}>
-                  修改
-                </Button>
-              </Space>
-            </Flex>
+              </div>
+              {activeSessionDetail?.pending_interrupt ? (
+                <Alert
+                  style={{ marginBottom: 16 }}
+                  type="info"
+                  showIcon
+                  message={activeSessionDetail.pending_interrupt.title}
+                  description="当前会话存在待处理的中断，下面的表单会根据阶段提交结构化响应。"
+                />
+              ) : null}
+              {renderMainPanel()}
+              <div className="sender-wrap">
+                <Sender
+                  value={requirement}
+                  onChange={setRequirement}
+                  onSubmit={() => void handleStart()}
+                  loading={actionLoading && (activeSession?.stage === 'starting' || activeSession?.stage === 'idle')}
+                  placeholder="输入消息，Enter 发送"
+                  prefix={<Tag bordered={false}>{activeSession ? '发送到当前会话' : '先创建会话'}</Tag>}
+                  disabled={!activeSessionId || activeSession?.stage !== 'idle'}
+                />
+              </div>
+            </Card>
+          </Content>
 
-            {previewMode === 'gallery' ? (
-              <List
-                className="preview-list"
-                grid={{ gutter: 12, column: 2 }}
-                dataSource={previewList}
-                locale={{ emptyText: '暂无页面' }}
-                renderItem={(item) => (
-                  <List.Item>
-                    <Card
-                      hoverable
-                      size="small"
-                      onClick={() => {
-                        setSelectedPage(item.page)
-                        setZoomOpen(true)
-                      }}
-                      title={`第 ${item.page} 页`}
-                      extra={<FullscreenOutlined />}
-                    >
-                      <div className="thumbnail-canvas" dangerouslySetInnerHTML={{ __html: item.svg_content ?? '' }} />
-                    </Card>
-                  </List.Item>
-                )}
-              />
-            ) : (
-              <>
+          <Sider width={420} className="right-panel">
+            <Card className="panel-card preview-panel" bordered={false}>
+              <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
+                <Tabs
+                  activeKey={previewType}
+                  items={previewTabItems}
+                  onChange={(key) => setPreviewType(key as 'first_draft' | 'final_ppt')}
+                />
+                <Space>
+                  <Segmented
+                    value={previewMode}
+                    onChange={(value) => setPreviewMode(value as 'gallery' | 'single')}
+                    options={[
+                      { label: '缩略图视图', value: 'gallery' },
+                      { label: '单页视图', value: 'single' },
+                    ]}
+                  />
+                  <Button
+                    icon={<LayoutOutlined />}
+                    onClick={() => setModifyDrawerOpen(true)}
+                    disabled={previewList.length === 0}
+                  >
+                    修改
+                  </Button>
+                </Space>
+              </Flex>
+
+              {previewMode === 'gallery' ? (
                 <List
-                  className="page-selector"
-                  size="small"
+                  className="preview-list"
+                  grid={{ gutter: 12, column: 2 }}
                   dataSource={previewList}
                   locale={{ emptyText: '暂无页面' }}
                   renderItem={(item) => (
-                    <List.Item
-                      onClick={() => setSelectedPage(item.page)}
-                      className={selectedPage === item.page ? 'page-selector-active' : ''}
-                    >
-                      第 {item.page} 页
+                    <List.Item>
+                      <Card
+                        hoverable
+                        size="small"
+                        onClick={() => {
+                          setSelectedPage(item.page)
+                          setZoomOpen(true)
+                        }}
+                        title={`第 ${item.page} 页`}
+                        extra={<FullscreenOutlined />}
+                      >
+                        <div className="thumbnail-canvas" dangerouslySetInnerHTML={{ __html: item.svg_content ?? '' }} />
+                      </Card>
                     </List.Item>
                   )}
                 />
-                <div className="preview-stage preview-stage-clickable" onClick={() => setZoomOpen(true)}>
-                  {renderSvg(selectedPreview)}
-                </div>
-              </>
-            )}
-          </Card>
-        </Sider>
+              ) : (
+                <>
+                  <List
+                    className="page-selector"
+                    size="small"
+                    dataSource={previewList}
+                    locale={{ emptyText: '暂无页面' }}
+                    renderItem={(item) => (
+                      <List.Item
+                        onClick={() => setSelectedPage(item.page)}
+                        className={selectedPage === item.page ? 'page-selector-active' : ''}
+                      >
+                        第 {item.page} 页
+                      </List.Item>
+                    )}
+                  />
+                  <div className="preview-stage preview-stage-clickable" onClick={() => setZoomOpen(true)}>
+                    {renderSvg(selectedPreview)}
+                  </div>
+                </>
+              )}
+            </Card>
+          </Sider>
+        </Layout>
       </Layout>
 
       <Drawer
