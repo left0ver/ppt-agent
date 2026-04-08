@@ -1,15 +1,23 @@
-import { defineConfig } from 'vitest/config'
+import type { UserConfigExport } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 
-export default defineConfig(async () => ({
+const babelPlugin = await babel({ presets: [reactCompilerPreset()] })
+
+export default {
   plugins: [
     react(),
-    (await babel({ presets: [reactCompilerPreset()] })) as any,
+    babelPlugin,
   ],
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     css: true,
   },
-}))
+} satisfies UserConfigExport & {
+  test: {
+    environment: 'jsdom'
+    setupFiles: string
+    css: boolean
+  }
+}
