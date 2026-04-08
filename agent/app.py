@@ -99,6 +99,7 @@ class State(BaseModel):
     ppt_info: PPTInfo | None
     messages: Annotated[list[AnyMessage], add_messages]
     ppt_template_path: str | None = Field(
+        default=None,
         description="PPT模板的文件路径，例如template/template.pdf"
     )
     current_timeline: TimeLine = Field(
@@ -174,7 +175,8 @@ def get_core_type(field_name: str, model_class):
 
 
 # node
-def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
+def ask_for_ppt_info(input: InputSchema, runtime: Runtime,config: RunnableConfig) -> dict:
+    thread_id = config["configurable"].get("thread_id")
     llm = ChatOpenAI(
         model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
         base_url=os.getenv("GEMINI_BASE_URL"),
@@ -209,6 +211,11 @@ def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
             "file_type": ["pptx", "pdf"],
         }
     )
+    if have_ppt_template:
+        # TODO: 
+        ppt_template_path =  f"user_data/{thread_id}/template/template.pptx"
+    else:
+        ppt_template_path = None    
     return {
         "ppt_info": ppt_info,
         "have_ppt_content_files": have_ppt_content_files,
@@ -216,7 +223,7 @@ def ask_for_ppt_info(input: InputSchema, runtime: Runtime) -> dict:
         "current_timeline": TimeLine.INFO_GATHERED,
         "ppt_content_source_urls": ppt_content_source_urls,
         # TODO:设置一下ppt_template_path
-        # "ppt_template_path": None,
+        "ppt_template_path": None ,
     }
 
 
@@ -239,7 +246,7 @@ def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     grok_search_model = ChatOpenAI(
-        model="grok-4.20-beta",
+        model=os.getenv("GROK_SEARCH_MODEL") or "grok-4-1-fast-reasoning",
         base_url=os.environ["GROK_SEARCH_BASE_URL"],
         api_key=os.environ["GROK_SEARCH_API_KEY"],
         default_headers={"User-Agent": user_agent},
@@ -465,7 +472,7 @@ async def generate_ppt_content_per_page(
     # 设置User-Agent来解决被cf拦截的问题
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     grok_search_model = ChatOpenAI(
-        model="grok-4.1-thinking",
+        model=os.getenv("GROK_SEARCH_MODEL") or "grok-4-1-fast-reasoning",
         base_url=os.environ["GROK_SEARCH_BASE_URL"],
         api_key=os.environ["GROK_SEARCH_API_KEY"],
         default_headers={"User-Agent": user_agent},
@@ -681,15 +688,15 @@ async def generate_final_ppt(state: State, runtime: Runtime, config: RunnableCon
     return {"final_ppt_results": final_ppt_results}
 
 
-def start_workflow(input: InputSchema, thread_id: str):
+async def start_workflow(input: InputSchema, thread_id: str):
     config = RunnableConfig(configurable={"thread_id": thread_id})
-    response = agent.invoke(input, config=config)
+    response = await agent.ainvoke(input, config=config)
     return response
 
 
-def resume_workflow(thread_id: str, user_input: Any):
+async def resume_workflow(thread_id: str, user_input: Any):
     config = RunnableConfig(configurable={"thread_id": thread_id})
-    response = agent.invoke(Command(resume=user_input), config=config)
+    response = await agent.ainvoke(Command(resume=user_input), config=config)
     return response
 
 

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aspose-slides>=26.3.0",
+    "cairosvg>=2.9.0",
     "fastapi[standard]>=0.135.2",
     "firecrawl-py>=4.21.0",
     "gohumanloop>=0.0.15",
@@ -19,7 +20,9 @@ dependencies = [
     "mineru-kie-sdk>=0.1.1",
     "pymupdf>=1.27.2.2",
     "python-multipart>=0.0.22",
+    "python-pptx>=1.0.2",
     "streamlit>=1.55.0",
+    "svg2pptx>=1.0.3",
     "tavily-python>=0.7.23",
     "tenacity>=9.1.4",
 ]
