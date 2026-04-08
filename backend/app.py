@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import shutil
 import sys
-import uuid
-from dataclasses import asdict, dataclass, field
+import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +25,20 @@ for path in (ROOT_DIR, AGENT_DIR):
 
 from agent.app import InputSchema, resume_workflow, start_workflow  # noqa: E402
 from agent.modify_ppt import modify_ppt  # noqa: E402
+from backend.session_models import (  # noqa: E402
+    PendingInterruptResponse,
+    RenameSessionRequest,
+    SessionDetailResponse,
+    SessionMessageResponse,
+    SessionSummaryResponse,
+)
+from backend.session_store import (  # noqa: E402
+    MessageRecord as StoredMessageRecord,
+    SessionDetail as StoredSessionDetail,
+    SessionNotFoundError,
+    SessionRecord as StoredSessionRecord,
+    SessionStore as SqliteSessionStore,
+)
 from constant import InterruptType  # noqa: E402
 
 
@@ -181,46 +195,21 @@ def collect_generated_assets(thread_id: str) -> dict[str, Any]:
 
 
 @dataclass
-class SessionRecord:
+class RuntimeSessionRecord:
     thread_id: str
     status: str = "idle"
     stage: str = "idle"
-    created_at: str = field(default_factory=now_iso)
-    updated_at: str = field(default_factory=now_iso)
+    created_at: str = ""
+    updated_at: str = ""
     last_interrupt: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
 
-    def touch(self) -> None:
-        self.updated_at = now_iso()
-
-
-class SessionStore:
-    def __init__(self) -> None:
-        self._sessions: dict[str, SessionRecord] = {}
-
-    def create(self) -> SessionRecord:
-        thread_id = str(uuid.uuid4())
-        record = SessionRecord(thread_id=thread_id)
-        self._sessions[thread_id] = record
-        ensure_session_dirs(thread_id)
-        return record
-
-    def get(self, thread_id: str) -> SessionRecord:
-        record = self._sessions.get(thread_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="session not found")
-        return record
-
-    def save(self, record: SessionRecord) -> None:
-        record.touch()
-        self._sessions[record.thread_id] = record
-
-
-store = SessionStore()
-
-
-class CreateSessionResponse(BaseModel):
-    thread_id: str
+SESSION_DB_PATH = USER_DATA_DIR / "sessions.sqlite3"
+store = SqliteSessionStore(SESSION_DB_PATH)
+_store_db_path = store._db_path
+_stores_by_thread: dict[int, SqliteSessionStore] = {threading.get_ident(): store}
+_session_interrupt_state: dict[str, dict[str, Any] | None] = {}
+_session_error_state: dict[str, dict[str, Any] | None] = {}
 
 
 class ApiError(BaseModel):
@@ -291,7 +280,126 @@ class ModifyPageRequest(BaseModel):
     user_instruction: str = Field(min_length=1)
 
 
-def build_api_response(record: SessionRecord, data: Any = None) -> ApiResponse:
+def get_store_session(session_id: str) -> StoredSessionRecord:
+    active_store = get_active_store()
+    try:
+        return active_store.get_session(session_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="session not found") from exc
+
+
+def get_active_store() -> SqliteSessionStore:
+    global store, _store_db_path
+    current_thread = threading.get_ident()
+    if store._db_path != _store_db_path:
+        _store_db_path = store._db_path
+        _stores_by_thread.clear()
+        thread_store = SqliteSessionStore(_store_db_path)
+        _stores_by_thread[current_thread] = thread_store
+        store = thread_store
+        return thread_store
+    thread_store = _stores_by_thread.get(current_thread)
+    if thread_store is None:
+        thread_store = SqliteSessionStore(_store_db_path)
+        _stores_by_thread[current_thread] = thread_store
+    store = thread_store
+    return thread_store
+
+
+def ensure_session_exists(session_id: str) -> StoredSessionRecord:
+    session = get_store_session(session_id)
+    ensure_session_dirs(session.id)
+    return session
+
+
+def update_session_metadata(
+    session_id: str,
+    *,
+    title: str | None = None,
+    status: str | None = None,
+    stage: str | None = None,
+) -> StoredSessionRecord:
+    active_store = get_active_store()
+    current = get_store_session(session_id)
+    active_store._connection.execute(
+        """
+        UPDATE sessions
+        SET title = ?, status = ?, stage = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            current.title if title is None else title,
+            current.status if status is None else status,
+            current.stage if stage is None else stage,
+            now_iso(),
+            session_id,
+        ),
+    )
+    active_store._connection.commit()
+    return get_store_session(session_id)
+
+
+def get_runtime_session(session_id: str) -> RuntimeSessionRecord:
+    session = ensure_session_exists(session_id)
+    return RuntimeSessionRecord(
+        thread_id=session.id,
+        status=session.status,
+        stage=session.stage,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        last_interrupt=_session_interrupt_state.get(session_id),
+        error=_session_error_state.get(session_id),
+    )
+
+
+def save_runtime_session(record: RuntimeSessionRecord) -> RuntimeSessionRecord:
+    _session_interrupt_state[record.thread_id] = record.last_interrupt
+    _session_error_state[record.thread_id] = record.error
+    updated = update_session_metadata(
+        record.thread_id,
+        status=record.status,
+        stage=record.stage,
+    )
+    record.created_at = updated.created_at
+    record.updated_at = updated.updated_at
+    return record
+
+
+def map_session_summary(record: StoredSessionRecord) -> SessionSummaryResponse:
+    return SessionSummaryResponse(
+        id=record.id,
+        title=record.title,
+        status=record.status,
+        stage=record.stage,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def map_session_message(record: StoredMessageRecord) -> SessionMessageResponse:
+    return SessionMessageResponse(
+        id=record.id,
+        session_id=record.session_id,
+        role=record.role,
+        type=record.type,
+        content=record.content,
+        payload=record.payload,
+        created_at=record.created_at,
+    )
+
+
+def map_session_detail(record: StoredSessionDetail) -> SessionDetailResponse:
+    return SessionDetailResponse(
+        session=map_session_summary(record.session),
+        messages=[map_session_message(message) for message in record.messages],
+        pending_interrupt=PendingInterruptResponse.model_validate(record.pending_interrupt)
+        if record.pending_interrupt
+        else None,
+        preview=collect_generated_assets(record.session.id),
+    )
+
+
+def build_api_response(record: RuntimeSessionRecord, data: Any = None) -> ApiResponse:
     assets = collect_generated_assets(record.thread_id)
     payload = data if data is not None else assets
     return ApiResponse(
@@ -313,7 +421,7 @@ def build_api_response(record: SessionRecord, data: Any = None) -> ApiResponse:
 
 
 def adapt_agent_response(thread_id: str, raw_response: dict[str, Any]) -> ApiResponse:
-    record = store.get(thread_id)
+    record = get_runtime_session(thread_id)
     interrupt_payload = raw_response.get("__interrupt__")
     if interrupt_payload:
         normalized_interrupt = normalize_interrupt_payload(interrupt_payload)
@@ -321,23 +429,23 @@ def adapt_agent_response(thread_id: str, raw_response: dict[str, Any]) -> ApiRes
         record.stage = map_interrupt_to_stage(normalized_interrupt)
         record.last_interrupt = build_interrupt_response(normalized_interrupt)
         record.error = None
-        store.save(record)
+        save_runtime_session(record)
         return build_api_response(record)
 
     record.status = "completed"
     record.stage = "completed"
     record.last_interrupt = None
     record.error = None
-    store.save(record)
+    save_runtime_session(record)
     return build_api_response(record)
 
 
 async def run_generation(thread_id: str, action: str, payload: Any) -> ApiResponse:
-    record = store.get(thread_id)
+    record = get_runtime_session(thread_id)
     record.status = "running"
     record.stage = action
     record.error = None
-    store.save(record)
+    save_runtime_session(record)
     try:
         if action == "starting":
             raw_response =await start_workflow(InputSchema(ppt_requirement=payload), thread_id)
@@ -348,7 +456,7 @@ async def run_generation(thread_id: str, action: str, payload: Any) -> ApiRespon
         record.status = "failed"
         record.stage = "failed"
         record.error = {"message": str(exc)}
-        store.save(record)
+        save_runtime_session(record)
         return build_api_response(record)
 
 
@@ -368,11 +476,32 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/sessions", response_model=CreateSessionResponse)
-def create_session() -> CreateSessionResponse:
-    record = store.create()
-    print(f"Created new session with thread_id: {record.thread_id}")
-    return CreateSessionResponse(thread_id=record.thread_id)
+@app.post("/api/sessions", response_model=SessionSummaryResponse)
+def create_session() -> SessionSummaryResponse:
+    record = get_active_store().create_session()
+    ensure_session_dirs(record.id)
+    print(f"Created new session with session_id: {record.id}")
+    return map_session_summary(record)
+
+
+@app.get("/api/sessions", response_model=list[SessionSummaryResponse])
+def list_sessions() -> list[SessionSummaryResponse]:
+    return [map_session_summary(record) for record in get_active_store().list_sessions()]
+
+
+@app.get("/api/sessions/{session_id}", response_model=SessionDetailResponse)
+def get_session(session_id: str) -> SessionDetailResponse:
+    ensure_session_exists(session_id)
+    return map_session_detail(get_active_store().get_session_detail(session_id))
+
+
+@app.patch("/api/sessions/{session_id}", response_model=SessionSummaryResponse)
+def rename_session(session_id: str, request: RenameSessionRequest) -> SessionSummaryResponse:
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title must not be blank")
+    renamed = update_session_metadata(session_id, title=title)
+    return map_session_summary(renamed)
 
 
 @app.post("/api/ppt/start", response_model=ApiResponse)
@@ -393,7 +522,7 @@ async def resume_ppt_info(request: ResumePptInfoRequest) -> ApiResponse:
 def upload_content_files(
     thread_id: str = Form(...), files: list[UploadFile] = File(default_factory=list)
 ) -> dict[str, Any]:
-    store.get(thread_id)
+    ensure_session_exists(thread_id)
     saved_files: list[dict[str, Any]] = []
     allowed_extensions = {".pdf", ".docx", ".markdown", ".md"}
     context_dir = ensure_session_dirs(thread_id) / "context_files"
@@ -421,7 +550,7 @@ async def resume_content_sources(request: ResumeContentSourcesRequest) -> ApiRes
 def upload_template_file(
     thread_id: str = Form(...), file: UploadFile = File(...)
 ) -> dict[str, Any]:
-    store.get(thread_id)
+    ensure_session_exists(thread_id)
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".ppt", ".pptx"}:
         raise HTTPException(status_code=400, detail="template only supports .ppt or .pptx")
@@ -445,8 +574,7 @@ async def resume_final_style(request: ResumeFinalStyleRequest) -> ApiResponse:
 
 @app.get("/api/ppt/status", response_model=ApiResponse)
 def get_ppt_status(thread_id: str = Query(...)) -> ApiResponse:
-    record = store.get(thread_id)
-    return build_api_response(record)
+    return build_api_response(get_runtime_session(thread_id))
 
 
 @app.get("/api/ppt/svg/{thread_id}/{ppt_type}/{page}")
@@ -455,7 +583,7 @@ def get_svg_page(
     ppt_type: Literal["first_draft", "final_ppt"],
     page: int,
 ) -> Response:
-    store.get(thread_id)
+    ensure_session_exists(thread_id)
     svg_path = ensure_session_dirs(thread_id) / ppt_type / f"page_{page}.svg"
     if not svg_path.exists():
         raise HTTPException(status_code=404, detail="svg not found")
@@ -466,13 +594,13 @@ def get_svg_page(
 
 @app.post("/api/ppt/modify", response_model=ApiResponse)
 def modify_page(request: ModifyPageRequest) -> ApiResponse:
-    record = store.get(request.thread_id)
+    record = get_runtime_session(request.thread_id)
     previous_stage = record.stage
     previous_status = record.status
     record.status = "running"
     record.stage = "modifying_page"
     record.error = None
-    store.save(record)
+    save_runtime_session(record)
     try:
         new_svg_list: list[dict[str, Any]] = []
         for page in request.pages:
@@ -490,7 +618,7 @@ def modify_page(request: ModifyPageRequest) -> ApiResponse:
         record.stage = previous_stage if previous_stage in {"awaiting_final_style", "completed"} else "completed"
         record.last_interrupt = None
         record.error = None
-        store.save(record)
+        save_runtime_session(record)
         return build_api_response(
             record,
             data={
@@ -503,10 +631,5 @@ def modify_page(request: ModifyPageRequest) -> ApiResponse:
         record.status = "failed"
         record.stage = "failed"
         record.error = {"message": str(exc)}
-        store.save(record)
+        save_runtime_session(record)
         return build_api_response(record)
-
-
-@app.get("/api/sessions/{thread_id}")
-def get_session(thread_id: str) -> dict[str, Any]:
-    return asdict(store.get(thread_id))
