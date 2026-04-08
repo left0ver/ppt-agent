@@ -9,6 +9,10 @@ __pycache__/
 *.svg
 *.ppt
 *.pptx
+*.pdf
+*.png
+*.jpg
+*.jpeg
 # C extensions
 *.so
 

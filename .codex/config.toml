@@ -1,0 +1,19 @@
+# 使用的主模型
+model = "gpt-5.4"
+
+# 推理强度：high 表示更重视复杂任务下的分析能力
+model_reasoning_effort = "high"
+
+# 输出风格：pragmatic 偏务实、直接
+personality = "pragmatic"
+
+
+# =========================
+# Sandbox
+# =========================
+
+# 沙箱模式：允许在工作区内写入
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true # 允许网络访问
