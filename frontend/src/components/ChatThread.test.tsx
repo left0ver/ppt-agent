@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('@ant-design/icons', () => {
   const Icon = () => null
   return {
-    EditOutlined: Icon,
     PlusOutlined: Icon,
     UploadOutlined: Icon,
   }
@@ -208,7 +207,6 @@ describe('ChatThread', () => {
         pendingInterruptId="m1"
         requirement=""
         onRequirementChange={() => undefined}
-        onRename={() => undefined}
         onSend={() => undefined}
         onSubmitInterrupt={() => undefined}
       />,
@@ -230,7 +228,6 @@ describe('ChatThread', () => {
         pendingInterruptId="pending-1"
         requirement=""
         onRequirementChange={() => undefined}
-        onRename={() => undefined}
         onSend={() => undefined}
         onSubmitInterrupt={() => undefined}
       />,
@@ -266,7 +263,6 @@ describe('ChatThread', () => {
         pendingInterruptId="m-confirm"
         requirement=""
         onRequirementChange={() => undefined}
-        onRename={() => undefined}
         onSend={() => undefined}
         onSubmitInterrupt={onSubmitInterrupt}
       />,
@@ -275,5 +271,76 @@ describe('ChatThread', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认' }))
 
     expect(onSubmitInterrupt).toHaveBeenCalledWith('m-confirm', { confirmed: true })
+  })
+
+  it('scrolls to the newest message when the stream grows', () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+
+    const { rerender } = render(
+      <ChatThread
+        sessionTitle="滚动会话"
+        sessionStatus="completed"
+        sessionStage="completed"
+        loading={false}
+        messages={[
+          {
+            id: 'm-1',
+            session_id: 's1',
+            role: 'assistant',
+            type: 'text',
+            content: '第一条消息',
+            payload: null,
+            created_at: '2026-04-08T00:00:00Z',
+          },
+        ]}
+        pendingInterruptId={null}
+        requirement=""
+        onRequirementChange={() => undefined}
+        onSend={() => undefined}
+        onSubmitInterrupt={() => undefined}
+      />,
+    )
+
+    const initialCalls = scrollIntoView.mock.calls.length
+
+    rerender(
+      <ChatThread
+        sessionTitle="滚动会话"
+        sessionStatus="completed"
+        sessionStage="completed"
+        loading={false}
+        messages={[
+          {
+            id: 'm-1',
+            session_id: 's1',
+            role: 'assistant',
+            type: 'text',
+            content: '第一条消息',
+            payload: null,
+            created_at: '2026-04-08T00:00:00Z',
+          },
+          {
+            id: 'm-2',
+            session_id: 's1',
+            role: 'assistant',
+            type: 'text',
+            content: '第二条消息',
+            payload: null,
+            created_at: '2026-04-08T00:00:01Z',
+          },
+        ]}
+        pendingInterruptId={null}
+        requirement=""
+        onRequirementChange={() => undefined}
+        onSend={() => undefined}
+        onSubmitInterrupt={() => undefined}
+      />,
+    )
+
+    expect(scrollIntoView.mock.calls.length).toBeGreaterThan(initialCalls)
   })
 })

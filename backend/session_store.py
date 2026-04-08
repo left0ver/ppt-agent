@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from enum import Enum
 import json
 import sqlite3
 import uuid
+from dataclasses import asdict, is_dataclass
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,8 +18,24 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _json_compatible(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value):
+        return {key: _json_compatible(item) for key, item in asdict(value).items()}
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_compatible(item) for item in value]
+    if hasattr(value, "model_dump"):
+        return _json_compatible(value.model_dump())  # type: ignore[no-any-return]
+    return value
+
+
 def _json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(_json_compatible(value), ensure_ascii=False, separators=(",", ":"))
 
 
 def _json_loads(value: str | None) -> Any:

@@ -1,5 +1,5 @@
 import { FullscreenOutlined, LayoutOutlined } from '@ant-design/icons'
-import { Button, Card, Flex, List, Segmented, Space, Tabs } from 'antd'
+import { Button, Card, List, Segmented, Tabs } from 'antd'
 import type { TabsProps } from 'antd'
 import type { ReactNode } from 'react'
 import type { PreviewResult } from '../types'
@@ -10,10 +10,14 @@ interface PreviewPanelProps {
   previewMode: 'gallery' | 'single'
   selectedPage: number
   selectedPreview: PreviewResult | null
+  draftCount: number
+  finalCount: number
   onChangeType: (value: 'first_draft' | 'final_ppt') => void
   onChangeMode: (value: 'gallery' | 'single') => void
   onSelectPage: (page: number) => void
   onModify: () => void
+  onExportDraft: () => void
+  onExportFinal: () => void
   onOpenZoom: () => void
   renderSvg: (item: PreviewResult | null) => ReactNode
 }
@@ -29,22 +33,47 @@ export default function PreviewPanel({
   previewMode,
   selectedPage,
   selectedPreview,
+  draftCount,
+  finalCount,
   onChangeType,
   onChangeMode,
   onSelectPage,
   onModify,
+  onExportDraft,
+  onExportFinal,
   onOpenZoom,
   renderSvg,
 }: PreviewPanelProps) {
   return (
     <Card className="panel-card preview-panel" bordered={false}>
-      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-        <Tabs
-          activeKey={previewType}
-          items={previewTabItems}
-          onChange={(key) => onChangeType(key as 'first_draft' | 'final_ppt')}
-        />
-        <Space>
+      <div className="preview-panel__header">
+        <div>
+          {/* <p className="preview-panel__eyebrow">Preview Workspace</p> */}
+          <h3 className="preview-panel__title">页面预览</h3>
+        </div>
+        <div className="preview-panel__stats">
+          <span className="preview-panel__stat">初稿 {draftCount}</span>
+          <span className="preview-panel__stat">终稿 {finalCount}</span>
+        </div>
+      </div>
+
+      <div className="preview-panel__toolbar">
+        <div className="preview-panel__toolbar-row preview-panel__toolbar-row--primary">
+          <Tabs
+            activeKey={previewType}
+            items={previewTabItems}
+            onChange={(key) => onChangeType(key as 'first_draft' | 'final_ppt')}
+          />
+          <div className="preview-panel__button-group">
+            <Button onClick={onExportDraft} disabled={draftCount === 0}>
+              导出初稿
+            </Button>
+            <Button onClick={onExportFinal} disabled={finalCount === 0}>
+              导出终稿
+            </Button>
+          </div>
+        </div>
+        <div className="preview-panel__toolbar-row preview-panel__toolbar-row--secondary">
           <Segmented
             value={previewMode}
             onChange={(value) => onChangeMode(value as 'gallery' | 'single')}
@@ -58,10 +87,10 @@ export default function PreviewPanel({
             onClick={onModify}
             disabled={previewList.length === 0}
           >
-            修改
+            自然语言修改
           </Button>
-        </Space>
-      </Flex>
+        </div>
+      </div>
 
       {previewMode === 'gallery' ? (
         <List

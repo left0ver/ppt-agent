@@ -24,7 +24,7 @@ for path in (ROOT_DIR, AGENT_DIR):
         sys.path.insert(0, str(path))
 
 from agent.app import InputSchema, resume_workflow, start_workflow  # noqa: E402
-from agent.modify_ppt import modify_ppt  # noqa: E402
+from agent.modify_ppt import modify_ppt_agent  # noqa: E402
 from backend.session_models import (  # noqa: E402
     PendingInterruptResponse,
     RenameSessionRequest,
@@ -73,6 +73,36 @@ def sanitize_filename(name: str) -> str:
     if not safe_name:
         return "upload.bin"
     return safe_name
+
+
+def normalize_session_title(value: str, max_length: int = 48) -> str:
+    title = " ".join(value.split()).strip()
+    if not title:
+        return ""
+    return title[:max_length]
+
+
+def extract_theme_title(payload: Any) -> str:
+    if isinstance(payload, dict):
+        theme = payload.get("theme")
+        if isinstance(theme, str):
+            return normalize_session_title(theme)
+        nested_payload = payload.get("payload")
+        if nested_payload is not payload:
+            nested_title = extract_theme_title(nested_payload)
+            if nested_title:
+                return nested_title
+    return ""
+
+
+def maybe_assign_session_title_from_payload(session_id: str, payload: Any) -> None:
+    current_session = get_store_session(session_id)
+    if current_session.title.strip() != "新会话":
+        return
+    theme_title = extract_theme_title(payload)
+    if not theme_title:
+        return
+    update_session_metadata(session_id, title=theme_title)
 
 
 def write_upload_file(upload: UploadFile, destination: Path) -> None:
@@ -179,6 +209,12 @@ def resolve_ppt_dir_name(ppt_type: str) -> Literal["first_draft", "final_ppt"]:
     if ppt_type in {"final_ppt", "终稿"}:
         return "final_ppt"
     raise HTTPException(status_code=400, detail="unsupported ppt type")
+
+
+def build_modify_agent_instruction(pages: list[int], user_instruction: str) -> str:
+    page_text = "、".join(f"第{page}页" for page in pages)
+    normalized_instruction = user_instruction.strip()
+    return f"请只修改以下页面：{page_text}。\n用户原始修改要求：{normalized_instruction}"
 
 
 
@@ -652,6 +688,7 @@ async def submit_session_message(
             raw_response = await start_workflow(InputSchema(ppt_requirement=content), session_id)
         else:
             payload = require_interrupt_response(request)
+            print(f"Received interrupt response for session {session_id}: {payload}")
             active_store.append_message(
                 session_id=session_id,
                 role="user",
@@ -659,6 +696,7 @@ async def submit_session_message(
                 content=(request.content or "").strip() or None,
                 payload=payload,
             )
+            maybe_assign_session_title_from_payload(session_id, payload)
             active_store.update_session(session_id, status="running")
             raw_response = await resume_workflow(session_id, payload)
         detail = persist_workflow_result(session_id, raw_response)
@@ -745,6 +783,8 @@ async def resume_template(request: ResumeTemplateRequest) -> ApiResponse:
         type="interrupt_response",
         payload=request.have_ppt_template,
     )
+    # print(request.have_ppt_template)
+    print(f"Resuming with template: {request.have_ppt_template}")
     return await run_generation(request.thread_id, "generating_outline", request.have_ppt_template)
 
 
@@ -789,17 +829,23 @@ def modify_page(request: ModifyPageRequest) -> ApiResponse:
     record.error = None
     save_runtime_session(record)
     try:
-        new_svg_list: list[dict[str, Any]] = []
-        for page in request.pages:
-            result = modify_ppt.invoke(
-                {
-                    "thread_id": request.thread_id,
-                    "ppt_type": request.ppt_type,
-                    "ppt_page": page,
-                    "user_instruction": f"请只修改第{page}页。{request.user_instruction}",
-                }
-            )
-            new_svg_list.append(result)
+        response = modify_ppt_agent.invoke(
+            {
+                "thread_id": request.thread_id,
+                "ppt_type": request.ppt_type,
+                "user_instruction": build_modify_agent_instruction(
+                    request.pages,
+                    request.user_instruction,
+                ),
+                "messages": [],
+            },
+            config={"configurable": {"thread_id": request.thread_id}},
+        )
+        response_payload = response if isinstance(response, dict) else {}
+        new_svg_list = response_payload.get("new_svg_list") or []
+        response_content = response_payload.get("response_content")
+        if not isinstance(response_content, str) or not response_content.strip():
+            response_content = f"已完成 {len(new_svg_list)} 页{request.ppt_type}修改。"
 
         record.status = previous_status if previous_status in {"interrupted", "completed"} else "completed"
         record.stage = previous_stage if previous_stage in {"awaiting_final_style", "completed"} else "completed"
@@ -808,7 +854,7 @@ def modify_page(request: ModifyPageRequest) -> ApiResponse:
         return build_api_response(
             get_runtime_session(request.thread_id),
             data={
-                "response_content": f"已完成 {len(new_svg_list)} 页{request.ppt_type}修改。",
+                "response_content": response_content,
                 "new_svg_list": new_svg_list,
                 **collect_generated_assets(request.thread_id),
             },

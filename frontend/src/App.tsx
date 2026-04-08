@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  LeftOutlined,
   ReloadOutlined,
+  RightOutlined,
 } from '@ant-design/icons'
 import { Sender } from '@ant-design/x'
 import {
@@ -26,6 +28,7 @@ import {
   uploadContentFiles,
   uploadTemplate,
 } from './api'
+import { exportSlidesToPptx } from './pptExport'
 import ChatThread from './components/ChatThread'
 import PreviewPanel from './components/PreviewPanel'
 import SessionSidebar from './components/SessionSidebar'
@@ -101,6 +104,12 @@ function App() {
     () => previewList.find((item) => item.page === selectedPage) ?? previewList[0] ?? null,
     [previewList, selectedPage],
   )
+  const selectedPreviewIndex = selectedPreview
+    ? previewList.findIndex((item) => item.page === selectedPreview.page)
+    : -1
+  const canGoPrevPreview = selectedPreviewIndex > 0
+  const canGoNextPreview =
+    selectedPreviewIndex >= 0 && selectedPreviewIndex < previewList.length - 1
 
   const applySessionDetail = (detail: SessionDetail) => {
     setSessionDetail(detail)
@@ -276,12 +285,12 @@ function App() {
     }
   }
 
-  const handleRenameSession = async (title: string) => {
-    if (!activeSessionId || !title.trim()) return
+  const handleRenameSession = async (sessionId: string, title: string) => {
+    if (!sessionId || !title.trim()) return
 
     setActionLoading(true)
     try {
-      const updated = await renameSession(activeSessionId, title.trim())
+      const updated = await renameSession(sessionId, title.trim())
       setSessions((current) => upsertSessionSummary(current, updated))
       setSessionDetail((current) =>
         current?.session.id === updated.id ? { ...current, session: updated } : current,
@@ -291,6 +300,31 @@ function App() {
       void message.error(errorMessage)
     } finally {
       setActionLoading(false)
+    }
+  }
+
+  const handleExport = async (type: 'first_draft' | 'final_ppt') => {
+    const slides = type === 'final_ppt' ? preview.final_ppt_results : preview.first_draft_results
+    if (slides.length === 0) {
+      void message.warning(type === 'final_ppt' ? '当前没有可导出的终稿页面' : '当前没有可导出的初稿页面')
+      return
+    }
+
+    const baseTitle = (activeSession?.title ?? 'PPT Agent').trim() || 'PPT Agent'
+    const suffix = type === 'final_ppt' ? '终稿' : '初稿'
+
+    try {
+      await exportSlidesToPptx({
+        slides,
+        fileName: `${baseTitle}-${suffix}.pptx`,
+        author: 'PPT Agent',
+        subject: `${suffix}导出`,
+        title: `${baseTitle}-${suffix}`,
+      })
+      void message.success(`${suffix}导出完成`)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : `${suffix}导出失败`
+      void message.error(errorMessage)
     }
   }
 
@@ -446,9 +480,17 @@ function App() {
     return <div className="svg-canvas" dangerouslySetInnerHTML={{ __html: item.svg_content }} />
   }
 
+  const navigatePreview = (direction: 'prev' | 'next') => {
+    if (selectedPreviewIndex < 0) return
+    const nextIndex = direction === 'prev' ? selectedPreviewIndex - 1 : selectedPreviewIndex + 1
+    const nextPreview = previewList[nextIndex]
+    if (!nextPreview) return
+    setSelectedPage(nextPreview.page)
+  }
+
   return (
     <Layout className="app-shell">
-      <Sider width={320} className="app-shell__sidebar">
+      <Sider width={280} className="app-shell__sidebar">
         <SessionSidebar
           sessions={sessions}
           activeSessionId={activeSessionId}
@@ -456,6 +498,7 @@ function App() {
           creating={actionLoading}
           onCreateSession={() => void handleCreateSession()}
           onSelectSession={setActiveSessionId}
+          onRenameSession={(sessionId, title) => void handleRenameSession(sessionId, title)}
         />
       </Sider>
 
@@ -489,7 +532,6 @@ function App() {
               pendingInterruptId={activeSessionDetail?.pending_interrupt?.message_id ?? null}
               requirement={requirement}
               onRequirementChange={setRequirement}
-              onRename={(title) => void handleRenameSession(title)}
               onSend={() => void handleStart()}
               onSubmitInterrupt={(messageId, payload) =>
                 void handleInterruptSubmit(messageId, payload)
@@ -498,17 +540,21 @@ function App() {
             />
           </Content>
 
-          <Sider width={420} className="right-panel">
+          <Sider width={440} className="right-panel">
             <PreviewPanel
               previewList={previewList}
               previewType={previewType}
               previewMode={previewMode}
               selectedPage={selectedPage}
               selectedPreview={selectedPreview}
+              draftCount={firstDraftCount}
+              finalCount={finalDraftCount}
               onChangeType={setPreviewType}
               onChangeMode={setPreviewMode}
               onSelectPage={setSelectedPage}
               onModify={() => setModifyDrawerOpen(true)}
+              onExportDraft={() => void handleExport('first_draft')}
+              onExportFinal={() => void handleExport('final_ppt')}
               onOpenZoom={() => setZoomOpen(true)}
               renderSvg={renderSvg}
             />
@@ -517,7 +563,7 @@ function App() {
       </Layout>
 
       <Drawer
-        title={`修改${modifyType}`}
+        title={`自然语言修改${modifyType}`}
         open={modifyDrawerOpen}
         onClose={() => setModifyDrawerOpen(false)}
         width={420}
@@ -536,7 +582,7 @@ function App() {
             showIcon
             type="info"
             message={`当前默认页：第 ${selectedPage} 页`}
-            description="可以同时选择多个页面，后端会把同一条修改指令应用到所选页面。"
+            description="选择一页或多页后，直接用自然语言描述你想改的内容，后端会通过 modify_ppt agent 逐页完成修改。"
           />
           <Select
             mode="multiple"
@@ -563,7 +609,7 @@ function App() {
             loading={actionLoading}
             disabled={selectedModifyPages.length === 0}
           >
-            提交多页修改
+            提交给修改 Agent
           </Button>
         </Space>
       </Drawer>
@@ -576,6 +622,25 @@ function App() {
         className="zoom-modal"
         title={selectedPreview ? `第 ${selectedPreview.page} 页` : '页面预览'}
       >
+        <div className="zoom-toolbar">
+          <Button
+            icon={<LeftOutlined />}
+            onClick={() => navigatePreview('prev')}
+            disabled={!canGoPrevPreview}
+          >
+            上一页
+          </Button>
+          <span className="zoom-toolbar__meta">
+            {selectedPreview ? `第 ${selectedPreview.page} / ${previewList.length} 页` : '暂无页面'}
+          </span>
+          <Button
+            icon={<RightOutlined />}
+            onClick={() => navigatePreview('next')}
+            disabled={!canGoNextPreview}
+          >
+            下一页
+          </Button>
+        </div>
         <div className="zoom-stage">{renderSvg(selectedPreview)}</div>
       </Modal>
     </Layout>

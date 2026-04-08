@@ -54,7 +54,7 @@ export default function TopTimeline({
     <section className="top-timeline" aria-label="当前流程时间线">
       <div className="top-timeline__header">
         <div>
-          <p className="top-timeline__eyebrow">Workspace Timeline</p>
+          {/* <p className="top-timeline__eyebrow">Workspace Timeline</p> */}
           <h2 className="top-timeline__title">当前流程</h2>
         </div>
         <div className="top-timeline__stats">

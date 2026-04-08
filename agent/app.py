@@ -53,14 +53,14 @@ from task import (
     generate_first_draft_task_with_delay,
     search_page_content_task_with_delay,
 )
-from temp import (
-    first_draft_results,
-    ppt_content_files_markdown_contents,
-    ppt_outline,
-    ppt_page_contents,
-    user_content,
-    web_fetch_results,
-)
+# from temp import (
+#     first_draft_results,
+#     ppt_content_files_markdown_contents,
+#     ppt_outline,
+#     ppt_page_contents,
+#     user_content,
+#     web_fetch_results,
+# )
 from utils import extract_svg_from_response, ppt2svg, setup_logging, verify_svg
 
 load_dotenv()
@@ -210,7 +210,7 @@ def ask_for_ppt_info(input: InputSchema, runtime: Runtime,config: RunnableConfig
             "type": InterruptType.UPLOAD_PPT_TEMPLATE,
             "file_type": ["pptx", "pdf"],
         }
-    )
+    )["have_ppt_template"]
     if have_ppt_template:
         # TODO: 
         ppt_template_path =  f"user_data/{thread_id}/template/template.pptx"

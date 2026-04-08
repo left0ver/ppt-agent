@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type * as React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -17,8 +17,11 @@ vi.mock('@ant-design/icons', () => {
     FolderOpenOutlined: Icon,
     FullscreenOutlined: Icon,
     LayoutOutlined: Icon,
+    LeftOutlined: Icon,
+    MoreOutlined: Icon,
     PlusOutlined: Icon,
     ReloadOutlined: Icon,
+    RightOutlined: Icon,
     UploadOutlined: Icon,
   }
 })
@@ -197,7 +200,8 @@ vi.mock('antd', async () => {
   const Space = passthrough('Space')
   const Flex = passthrough('Flex')
   const Drawer = ({ children, open }: React.PropsWithChildren<{ open?: boolean }>) => (open ? <div>{children}</div> : null)
-  const Modal = ({ children, open }: React.PropsWithChildren<{ open?: boolean }>) => (open ? <div>{children}</div> : null)
+  const Modal = ({ children, open }: React.PropsWithChildren<{ open?: boolean }>) =>
+    open ? <div data-testid="modal">{children}</div> : null
   const Empty = ({ description }: { description?: React.ReactNode }) => <div>{description}</div>
   const Spin = () => <div>loading</div>
   const Avatar = passthrough('Avatar')
@@ -304,6 +308,7 @@ vi.mock('antd', async () => {
 })
 
 const { default: App } = await import('./App')
+const { exportSlidesToPptx } = await import('./pptExport')
 
 function deferredResponse() {
   let resolve!: (value: Response) => void
@@ -329,6 +334,7 @@ describe('App session bootstrap', () => {
 
   afterEach(() => {
     cleanup()
+    vi.clearAllMocks()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -579,7 +585,7 @@ describe('App session bootstrap', () => {
     expect(screen.queryByText(/Alpha Interrupt/)).not.toBeInTheDocument()
   })
 
-  it('renames the active session title', async () => {
+  it('renames the active session title from the sidebar', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
 
@@ -642,10 +648,174 @@ describe('App session bootstrap', () => {
 
     render(<App />)
 
+    fireEvent.click(await screen.findByRole('button', { name: '会话操作 今天为什么要上班' }))
     fireEvent.click(await screen.findByRole('button', { name: '重命名' }))
     fireEvent.change(screen.getByDisplayValue('今天为什么要上班'), { target: { value: '新的标题' } })
     fireEvent.keyDown(screen.getByDisplayValue('新的标题'), { key: 'Enter' })
 
     expect((await screen.findAllByText('新的标题')).length).toBeGreaterThan(0)
+  })
+
+  it('exports final slides from the preview panel', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url.endsWith('/api/sessions') && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'session-export',
+              title: 'AI 产品介绍',
+              status: 'completed',
+              stage: 'completed',
+              created_at: '2026-04-08T08:00:00Z',
+              updated_at: '2026-04-08T09:00:00Z',
+            },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (url.endsWith('/api/sessions/session-export') && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify({
+            session: {
+              id: 'session-export',
+              title: 'AI 产品介绍',
+              status: 'completed',
+              stage: 'completed',
+              created_at: '2026-04-08T08:00:00Z',
+              updated_at: '2026-04-08T09:00:00Z',
+            },
+            messages: [],
+            pending_interrupt: null,
+            preview: {
+              first_draft_results: [
+                {
+                  page: 1,
+                  svg_content: '<svg><text>draft</text></svg>',
+                  svg_url: '/api/ppt/svg/session-export/first_draft/1',
+                  file_path: '/tmp/draft-1.svg',
+                },
+              ],
+              final_ppt_results: [
+                {
+                  page: 1,
+                  svg_content: '<svg><text>final</text></svg>',
+                  svg_url: '/api/ppt/svg/session-export/final_ppt/1',
+                  file_path: '/tmp/final-1.svg',
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const exportButton = await screen.findByRole('button', { name: '导出终稿' })
+    await waitFor(() => expect(exportButton).not.toBeDisabled())
+    fireEvent.click(exportButton)
+
+    await waitFor(() => {
+      expect(exportSlidesToPptx).toHaveBeenCalledWith({
+        slides: [
+          {
+            page: 1,
+            svg_content: '<svg><text>final</text></svg>',
+            svg_url: '/api/ppt/svg/session-export/final_ppt/1',
+            file_path: '/tmp/final-1.svg',
+          },
+        ],
+        fileName: 'AI 产品介绍-终稿.pptx',
+        author: 'PPT Agent',
+        subject: '终稿导出',
+        title: 'AI 产品介绍-终稿',
+      })
+    })
+  })
+
+  it('switches pages from the zoom modal', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url.endsWith('/api/sessions') && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'session-zoom',
+              title: '缩放测试',
+              status: 'completed',
+              stage: 'completed',
+              created_at: '2026-04-08T08:00:00Z',
+              updated_at: '2026-04-08T09:00:00Z',
+            },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (url.endsWith('/api/sessions/session-zoom') && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify({
+            session: {
+              id: 'session-zoom',
+              title: '缩放测试',
+              status: 'completed',
+              stage: 'completed',
+              created_at: '2026-04-08T08:00:00Z',
+              updated_at: '2026-04-08T09:00:00Z',
+            },
+            messages: [],
+            pending_interrupt: null,
+            preview: {
+              first_draft_results: [],
+              final_ppt_results: [
+                {
+                  page: 1,
+                  svg_content: '<svg><text>final-1</text></svg>',
+                  svg_url: '/api/ppt/svg/session-zoom/final_ppt/1',
+                  file_path: '/tmp/final-1.svg',
+                },
+                {
+                  page: 2,
+                  svg_content: '<svg><text>final-2</text></svg>',
+                  svg_url: '/api/ppt/svg/session-zoom/final_ppt/2',
+                  file_path: '/tmp/final-2.svg',
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = render(<App />)
+
+    await screen.findByText('final-1')
+    const zoomTrigger = container.querySelector('.preview-stage-clickable')
+    expect(zoomTrigger).not.toBeNull()
+    fireEvent.click(zoomTrigger!)
+    const modal = await screen.findByTestId('modal')
+
+    expect(within(modal).getByRole('button', { name: '上一页' })).toBeInTheDocument()
+    expect(within(modal).getByRole('button', { name: '下一页' })).toBeInTheDocument()
+
+    fireEvent.click(within(modal).getByRole('button', { name: '下一页' }))
+    expect(await within(modal).findByText('第 2 / 2 页')).toBeInTheDocument()
+
+    fireEvent.click(within(modal).getByRole('button', { name: '上一页' }))
+    expect(await within(modal).findByText('第 1 / 2 页')).toBeInTheDocument()
   })
 })

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,11 @@ class _ModifyPpt:
         return payload
 
 
+class _ModifyPptAgent:
+    def invoke(self, payload: object, config: object | None = None) -> object:
+        return payload
+
+
 class _InterruptValue:
     def __init__(self, value: str) -> None:
         self.value = value
@@ -51,6 +57,7 @@ agent_app_module.InputSchema = InputSchema
 agent_app_module.start_workflow = start_workflow
 agent_app_module.resume_workflow = resume_workflow
 agent_modify_ppt_module.modify_ppt = _ModifyPpt()
+agent_modify_ppt_module.modify_ppt_agent = _ModifyPptAgent()
 constant_module.InterruptType = InterruptType
 agent_module.app = agent_app_module
 agent_module.modify_ppt = agent_modify_ppt_module
@@ -173,6 +180,24 @@ def test_session_store_update_session_updates_only_provided_fields(tmp_path: Pat
     assert updated_state.title == "Renamed Session"
     assert updated_state.status == "running"
     assert updated_state.stage == "starting"
+
+
+def test_session_store_serializes_enum_payloads(tmp_path: Path) -> None:
+    class TimeLine(Enum):
+        INFO_GATHERED = "INFO_GATHERED"
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    session = store.create_session()
+
+    store.append_message(
+        session_id=session.id,
+        role="assistant",
+        type="status",
+        payload={"current_timeline": TimeLine.INFO_GATHERED},
+    )
+
+    detail = store.get_session_detail(session.id)
+    assert detail.messages[-1].payload == {"current_timeline": "INFO_GATHERED"}
 
 
 def test_submit_first_message_starts_workflow_and_persists_interrupt(
@@ -307,6 +332,64 @@ def test_submit_interrupt_response_resumes_workflow_and_clears_pending_interrupt
     assert detail["pending_interrupt"] is None
 
 
+def test_interrupt_response_uses_theme_as_default_session_title(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    client = make_client(tmp_path)
+    session = client.post("/api/sessions").json()
+
+    async def fake_start_workflow(input_schema: InputSchema, thread_id: str) -> dict[str, object]:
+        return {
+            "__interrupt__": {
+                "type": "edit",
+                "title": "请确认 PPT 基本信息",
+                "values": {
+                    "target_audience": "导师和同学",
+                    "user_role": "学生",
+                    "num_pages": 12,
+                    "theme": "旧主题",
+                    "layout_style": "top_bottom",
+                },
+            }
+        }
+
+    async def fake_resume_workflow(thread_id: str, payload: dict[str, object]) -> dict[str, object]:
+        return {"response_content": "已完成"}
+
+    monkeypatch.setattr(app_module, "start_workflow", fake_start_workflow)
+    monkeypatch.setattr(app_module, "resume_workflow", fake_resume_workflow)
+
+    first_response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={"type": "text", "content": "帮我做一个答辩 PPT"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["session"]["title"] == "新会话"
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={
+            "type": "interrupt_response",
+            "content": "已确认 PPT 信息：AI 产品介绍",
+            "payload": {
+                "target_audience": "投资人",
+                "user_role": "产品经理",
+                "num_pages": 12,
+                "theme": "AI 产品介绍",
+                "layout_style": "top_bottom",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session"]["title"] == "AI 产品介绍"
+
+    detail_response = client.get(f"/api/sessions/{session['id']}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["session"]["title"] == "AI 产品介绍"
+
+
 def test_upload_attachments_use_session_routes_without_advancing_workflow(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     session = client.post("/api/sessions").json()
@@ -346,6 +429,7 @@ def test_modify_page_response_preserves_pending_interrupt_view(
 ) -> None:
     client = make_client(tmp_path)
     session = client.post("/api/sessions").json()
+    calls: dict[str, Any] = {}
 
     async def fake_start_workflow(input_schema: InputSchema, thread_id: str) -> dict[str, object]:
         return {
@@ -356,12 +440,17 @@ def test_modify_page_response_preserves_pending_interrupt_view(
             }
         }
 
-    class FakeModifyPpt:
-        def invoke(self, payload: object) -> object:
-            return {"page": 1, "svg_content": "<svg />"}
+    class FakeModifyPptAgent:
+        def invoke(self, payload: object, config: object | None = None) -> object:
+            calls["payload"] = payload
+            calls["config"] = config
+            return {
+                "response_content": "第1页的终稿修改成功.",
+                "new_svg_list": [{"page": 1, "new_svg_content": "<svg />"}],
+            }
 
     monkeypatch.setattr(app_module, "start_workflow", fake_start_workflow)
-    monkeypatch.setattr(app_module, "modify_ppt", FakeModifyPpt())
+    monkeypatch.setattr(app_module, "modify_ppt_agent", FakeModifyPptAgent())
 
     start_response = client.post(
         f"/api/sessions/{session['id']}/messages",
@@ -382,6 +471,13 @@ def test_modify_page_response_preserves_pending_interrupt_view(
 
     assert modify_response.status_code == 200
     body = modify_response.json()
+    assert calls["payload"] == {
+        "thread_id": session["id"],
+        "ppt_type": "终稿",
+        "user_instruction": "请只修改以下页面：第1页。\n用户原始修改要求：Update the title slide.",
+        "messages": [],
+    }
+    assert calls["config"] == {"configurable": {"thread_id": session["id"]}}
     assert body["status"] == "interrupted"
     assert body["stage"] == "awaiting_final_style"
     assert body["interrupt"] == {
