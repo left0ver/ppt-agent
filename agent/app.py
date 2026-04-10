@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import re
-from enum import Enum
 from pathlib import Path
 from typing import (
     Annotated,
@@ -17,18 +16,19 @@ from typing import (
 )
 
 import json_repair
-from constant import InterruptType, LayoutType, TimeLine
+from constant import USER_DATA_ROOT_DIR, InterruptType, LayoutType, TimeLine
 from dotenv import load_dotenv
 from extractors import ExtractorFactory
 from langchain.messages import AnyMessage
-from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
 # from gohumanloop.adapters.langgraph_adapter import interrupt, create_resume_command
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import Command
@@ -99,11 +99,7 @@ class State(BaseModel):
     ppt_info: PPTInfo | None
     messages: Annotated[list[AnyMessage], add_messages]
     ppt_template_path: str | None = Field(
-        default=None,
-        description="PPT模板的文件路径，例如template/template.pdf"
-    )
-    current_timeline: TimeLine = Field(
-        default=TimeLine.NO_START, description="当前timeline"
+        default=None, description="PPT模板的文件路径，例如template/template.pdf"
     )
     have_ppt_content_files: bool = Field(
         default=False,
@@ -175,7 +171,11 @@ def get_core_type(field_name: str, model_class):
 
 
 # node
-def ask_for_ppt_info(input: InputSchema, runtime: Runtime,config: RunnableConfig) -> dict:
+def ask_for_ppt_info(
+    input: InputSchema, runtime: Runtime, config: RunnableConfig
+) -> dict:
+    writer = get_stream_writer()
+    writer({"current_stage": "正在确认PPT的具体需求"})
     thread_id = config["configurable"].get("thread_id")
     llm = ChatOpenAI(
         model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
@@ -195,35 +195,35 @@ def ask_for_ppt_info(input: InputSchema, runtime: Runtime,config: RunnableConfig
         {
             "title": "你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过",
             "type": InterruptType.UPLOAD_PPT_CONTENT_FILES,
-            "file_type": ["pdf", "docx", "markdown"],
+            "file_type": ["pdf", "docx", "markdown", "md"],
         }
     )
     # ppt_content_source_urls:list[str]
+    # TODO: 验证url是否正确
     have_ppt_content_files, ppt_content_source_urls = (
         ppt_content_source_from_user["have_ppt_content_files"],
         ppt_content_source_from_user.get("ppt_content_source_urls", None),
     )
 
-    have_ppt_template = interrupt(
+    ppt_template_info = interrupt(
         {
             "title": "你可以上传一个PPT模板文件，如果没有可以直接跳过",
             "type": InterruptType.UPLOAD_PPT_TEMPLATE,
             "file_type": ["pptx", "pdf"],
         }
     )
-    if have_ppt_template:
-        # TODO: 
-        ppt_template_path =  f"user_data/{thread_id}/template/template.pptx"
-    else:
-        ppt_template_path = None    
+    # 如果 have_ppt_template=False, ppt_template_path则为None
+    have_ppt_template, ppt_template_path = (
+        ppt_template_info["have_ppt_template"],
+        ppt_template_info["ppt_template_path"],
+    )
+
     return {
         "ppt_info": ppt_info,
         "have_ppt_content_files": have_ppt_content_files,
         "have_ppt_template": have_ppt_template,
-        "current_timeline": TimeLine.INFO_GATHERED,
         "ppt_content_source_urls": ppt_content_source_urls,
-        # TODO:设置一下ppt_template_path
-        "ppt_template_path": None ,
+        "ppt_template_path": ppt_template_path if have_ppt_template else None,
     }
 
 
@@ -238,8 +238,10 @@ def route_via_ppt_content_files(state: State):
 
 
 # node
-# 如果用户没有上传文档，则会使用grok+tavily 来根据ppt的主题来搜索一些相关的内容，结果会被用来生成ppt-outline
+# 使用grok+tavily 来根据ppt的主题来搜索一些相关的内容，结果会被用来生成ppt-outline
 def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
+    writer = get_stream_writer()
+    writer({"current_stage": "用户没有上传内容文件，正在根据PPT的相关信息来搜索内容"})
     thread_id = config["configurable"].get("thread_id")
     ppt_info: PPTInfo = state.ppt_info
     # 设置User-Agent来解决被cf拦截的问题
@@ -281,13 +283,15 @@ def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
 
 
 # node
-def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableConfig):
+def parse_ppt_content_files(state: State, runtime: Runtime, config: RunnableConfig):
     """
     使用mineru解析用户上传的文件
     """
+    writer = get_stream_writer()
+    writer({"current_stage": "正在解析用户PPT的内容文件"})
     thread_id = config["configurable"].get("thread_id")
-    ppt_content_dir = Path(f"user_data/{thread_id}/context_files")
-    parsed_output_dir = Path(f"user_data/{thread_id}/context_parse")
+    ppt_content_dir = Path(f"{USER_DATA_ROOT_DIR}/{thread_id}/context_files")
+    parsed_output_dir = Path(f"{USER_DATA_ROOT_DIR}/{thread_id}/context_parse")
     if not ppt_content_dir.exists():
         return {
             "parsed_ppt_content_files": [],
@@ -337,12 +341,13 @@ def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableCon
     ppt_content_files_markdown_contents = [
         file["markdown_content"] for file in parsed_files
     ]
+    # 处理markdown文件
     for markdown_file_path in markdown_file_paths:
         markdown_content = markdown_file_path.read_text(encoding="utf-8")
         ppt_content_files_markdown_contents.append(markdown_content)
 
     with open(
-        f"user_data/{thread_id}/ppt_content_files_markdown_contents.json",
+        f"{USER_DATA_ROOT_DIR}/{thread_id}/ppt_content_files_markdown_contents.json",
         "w",
         encoding="utf-8",
     ) as f:
@@ -353,9 +358,10 @@ def parser_ppt_content_files(state: State, runtime: Runtime, config: RunnableCon
 
 
 # node
-def parser_ppt_content_urls(state: State, runtime: Runtime, config: RunnableConfig):
+def parse_ppt_content_urls(state: State, runtime: Runtime, config: RunnableConfig):
     """解析用户所给的ppt内容相关的urls,通过Tavily或者Firecrawl来抓取对应的页面的内容转为markdown的格式"""
-    # TODO: 验证url是否正确
+    writer = get_stream_writer()
+    writer({"current_stage": "正在解析用户提供的内容相关的网站内容"})
     ppt_content_source_urls = state.ppt_content_source_urls
     if ppt_content_source_urls is None or len(ppt_content_source_urls) <= 0:
         return {}
@@ -376,14 +382,16 @@ def parser_ppt_content_urls(state: State, runtime: Runtime, config: RunnableConf
 
 
 # node
-def parser_ppt_template(
+def parse_ppt_template(
     state: State,
     runtime: Runtime,
     config: RunnableConfig,
 ):
     """
-    将用户上传的ppt、pptx、pdf模板转为svg的格式，用来后面LLM根据这个模板的svg来生成对应的ppt
+    将用户上传的ppt、pptx模板转为svg的格式，用来后面LLM根据这个模板的svg来生成对应的ppt
     """
+    writer = get_stream_writer()
+    writer({"current_stage": "正在解析用户上传的PPT模板"})
     # TODO: 可能得加一些pptx的页数的限制，页数太多会导致上下文太长
     thread_id = config["configurable"].get("thread_id")
     if not state.have_ppt_template:
@@ -391,7 +399,7 @@ def parser_ppt_template(
         return {
             "svg_template_lists": None,
         }
-    ppt_template_dir = Path(f"user_data/{thread_id}/template")
+    ppt_template_dir = Path(f"{USER_DATA_ROOT_DIR}/{thread_id}/template")
     all_ext = ["pptx", "ppt"]
     for ext in all_ext:
         maybe_ppt_template_file = ppt_template_dir / f"template.{ext}"
@@ -402,14 +410,16 @@ def parser_ppt_template(
         raise FileNotFoundError(
             f"在目录{ppt_template_dir}下没有找到ppt的模板文件，支持的格式有{','.join(all_ext)},但是用户却上传了模板文件。"
         )
-
+    # 将ppt转为svg
     svg_template_lists = ppt2svg(ppt_template_file)
     return {"svg_template_lists": svg_template_lists}
 
 
 # node
-def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig):
+async def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig):
     """生成ppt的大纲"""
+    writer = get_stream_writer()
+    writer({"current_stage": "正在生成PPT的大纲"})
     thread_id = config["configurable"].get("thread_id")
     if (
         state.ppt_content_files_markdown_contents is not None
@@ -451,7 +461,7 @@ def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableConfig)
     if match:
         ppt_outline_json_str = match.group(1)
         ppt_outline = json_parser.parse(ppt_outline_json_str)["ppt_outline"]
-    with open(f"user_data/{thread_id}/ppt_outline.json", "w", encoding="utf-8") as f:
+    with open(f"{USER_DATA_ROOT_DIR}/{thread_id}/ppt_outline.json", "w", encoding="utf-8") as f:
         json.dump(ppt_outline, f, ensure_ascii=False, indent=2)
     if (
         state.ppt_content_files_markdown_contents is not None
@@ -467,6 +477,8 @@ async def generate_ppt_content_per_page(
     state: State, runtime: Runtime, config: RunnableConfig
 ):
     """根据ppt的大纲来搜索每一页的内容或者根据用户上传的内容文件来提取出每一页所需的内容"""
+    writer = get_stream_writer()
+    writer({"current_stage": "正在根据大纲来生成PPT每一页的内容"})
     have_ppt_content_files = state.have_ppt_content_files
     thread_id = config["configurable"].get("thread_id")
     # 设置User-Agent来解决被cf拦截的问题
@@ -569,7 +581,7 @@ async def generate_ppt_content_per_page(
         + [{"type": "end_page", "content": end_page_content, "speaker_notes": ""}]
     )
     with open(
-        f"user_data/{thread_id}/ppt_page_contents.json", "w", encoding="utf-8"
+        f"{USER_DATA_ROOT_DIR}/{thread_id}/ppt_page_contents.json", "w", encoding="utf-8"
     ) as f:
         json.dump(ppt_page_contents, f, ensure_ascii=False, indent=2)
     return {
@@ -579,8 +591,9 @@ async def generate_ppt_content_per_page(
 
 # node
 async def generate_first_draft(state: State, runtime: Runtime, config: RunnableConfig):
+    writer = get_stream_writer()
+    writer({"current_stage": "正在生成PPT的初稿"})
     thread_id = config["configurable"].get("thread_id")
-
     generate_first_draft_model = ChatOpenAI(
         model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
         base_url=os.getenv("GEMINI_BASE_URL"),
@@ -620,6 +633,7 @@ async def generate_first_draft(state: State, runtime: Runtime, config: RunnableC
             chain = content_page_chain
         else:
             chain = cover_page_chain
+
         tasks.append(
             generate_first_draft_task_with_delay(
                 chain, page_content, thread_id, i, delay=0.0
@@ -628,7 +642,7 @@ async def generate_first_draft(state: State, runtime: Runtime, config: RunnableC
     first_draft_results = await asyncio.gather(*tasks)
 
     with open(
-        f"user_data/{thread_id}/first_draft_results.json", "w", encoding="utf-8"
+        f"{USER_DATA_ROOT_DIR}/{thread_id}/first_draft_results.json", "w", encoding="utf-8"
     ) as f:
         json.dump(first_draft_results, f, ensure_ascii=False, indent=2)
     return {
@@ -636,7 +650,9 @@ async def generate_first_draft(state: State, runtime: Runtime, config: RunnableC
     }
 
 
-def inquire_style(state: State, runtime: Runtime, config: RunnableConfig):
+def ask_for_style(state: State, runtime: Runtime, config: RunnableConfig):
+    writer = get_stream_writer()
+    writer({"current_stage": "正在确认需要的PPT风格"})
     thread_id = config["configurable"].get("thread_id")
     # 使用中断来让给用户确定PPT的风格
     user_ppt_style = interrupt(
@@ -653,6 +669,8 @@ def inquire_style(state: State, runtime: Runtime, config: RunnableConfig):
 # node
 async def generate_final_ppt(state: State, runtime: Runtime, config: RunnableConfig):
     """根据用户最终的PPT风格以及生成的初稿来生成终稿"""
+    writer = get_stream_writer()
+    writer({"current_stage": "正在生成最终的PPT"})
     thread_id = config["configurable"].get("thread_id")
     generate_final_ppt_model = ChatOpenAI(
         model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
@@ -682,62 +700,67 @@ async def generate_final_ppt(state: State, runtime: Runtime, config: RunnableCon
         )
     final_ppt_results = await asyncio.gather(*final_ppt_generate_tasks)
     with open(
-        f"user_data/{thread_id}/final_ppt_results.json", "w", encoding="utf-8"
+        f"{USER_DATA_ROOT_DIR}/{thread_id}/final_ppt_results.json", "w", encoding="utf-8"
     ) as f:
         json.dump(final_ppt_results, f, ensure_ascii=False, indent=2)
     return {"final_ppt_results": final_ppt_results}
 
 
 async def start_workflow(input: InputSchema, thread_id: str):
+    async with AsyncSqliteSaver.from_conn_string("checkpoint.db") as checkpointer:
+        agent = graph.compile(checkpointer=checkpointer)
     config = RunnableConfig(configurable={"thread_id": thread_id})
     response = await agent.ainvoke(input, config=config)
     return response
 
 
 async def resume_workflow(thread_id: str, user_input: Any):
+    async with AsyncSqliteSaver.from_conn_string("checkpoint.db") as checkpointer:
+        agent = graph.compile(checkpointer=checkpointer)
     config = RunnableConfig(configurable={"thread_id": thread_id})
     response = await agent.ainvoke(Command(resume=user_input), config=config)
     return response
 
 
-def get_status(thread_id: str):
-    config = RunnableConfig(configurable={"thread_id": thread_id})
-    current_state = agent.get_state(config)
-    return current_state.values.get("current_timeline", TimeLine.NO_START)
+# async def get_status(thread_id: str):
+#     async with AsyncSqliteSaver.from_conn_string("checkpoint.db") as checkpointer:
+#         agent = graph.compile(checkpointer=checkpointer)
+#     config = RunnableConfig(configurable={"thread_id": thread_id})
+#     current_state = agent.get_state(config)
+#     return current_state.values.get("current_timeline", TimeLine.NO_START)
 
 
 graph = StateGraph(state_schema=State, input_schema=InputSchema)
 graph.add_node("ask_for_ppt_info", ask_for_ppt_info)
 graph.add_node("search_ppt_contents", search_ppt_contents)
-graph.add_node("parser_ppt_content_files", parser_ppt_content_files)
-graph.add_node("parser_ppt_content_urls", parser_ppt_content_urls)
-graph.add_node("parser_ppt_template", parser_ppt_template)
+graph.add_node("parse_ppt_content_files", parse_ppt_content_files)
+graph.add_node("parse_ppt_content_urls", parse_ppt_content_urls)
+graph.add_node("parse_ppt_template", parse_ppt_template)
 graph.add_node("generate_ppt_outline", generate_ppt_outline)
 graph.add_node("generate_ppt_content_per_page", generate_ppt_content_per_page)
 graph.add_node("generate_first_draft", generate_first_draft)
-graph.add_node("inquire_style", inquire_style)
+graph.add_node("ask_for_style", ask_for_style)
 graph.add_node("generate_final_ppt", generate_final_ppt)
 graph.add_edge(START, "ask_for_ppt_info")
 graph.add_conditional_edges(
     "ask_for_ppt_info",
     route_via_ppt_content_files,
     {
-        "parser": "parser_ppt_content_files",
+        "parser": "parse_ppt_content_files",
         "search": "search_ppt_contents",
     },
 )
-graph.add_edge("parser_ppt_content_files", "parser_ppt_content_urls")
+graph.add_edge("parse_ppt_content_files", "parse_ppt_content_urls")
 
-graph.add_edge("search_ppt_contents", "parser_ppt_template")
-graph.add_edge("parser_ppt_content_urls", "parser_ppt_template")
-graph.add_edge("parser_ppt_template", "generate_ppt_outline")
+graph.add_edge("search_ppt_contents", "parse_ppt_template")
+graph.add_edge("parse_ppt_content_urls", "parse_ppt_template")
+graph.add_edge("parse_ppt_template", "generate_ppt_outline")
 graph.add_edge("generate_ppt_outline", "generate_ppt_content_per_page")
 graph.add_edge("generate_ppt_content_per_page", "generate_first_draft")
-graph.add_edge("generate_first_draft", "inquire_style")
-graph.add_edge("inquire_style", "generate_final_ppt")
+graph.add_edge("generate_first_draft", "ask_for_style")
+graph.add_edge("ask_for_style", "generate_final_ppt")
 graph.add_edge("generate_final_ppt", END)
 
-agent = graph.compile(checkpointer=InMemorySaver())
 
 
 if __name__ == "__main__":
@@ -750,60 +773,89 @@ if __name__ == "__main__":
     #     "style": "商务风",
     #     "num_pages": 80,
     # }
+    async def resume_when_abort(thread_id: str):
+        async with AsyncSqliteSaver.from_conn_string("checkpoint.db") as checkpointer:
+            agent = graph.compile(checkpointer=checkpointer)
+            config = RunnableConfig(configurable={"thread_id": thread_id})
+            # state_history = await agent.aget_state(config)
+            state_history = agent.aget_state_history(config)
+            # async for state in state_history:
+            # current_timeline = state.values.get("current_timeline", TimeLine.NO_START)
+            # print(f"当前timeline: {current_timeline}")
+            # print(f"当前state: {state}")
+            response = await agent.ainvoke(None, config, durability="sync")
+            # response = await agent.ainvoke(Command(resume=user_input), config=config)
+            return response
 
     async def main():
-        save_graph = True
-        graph_name = "ppt_generation_agent_graph.png"
-        if save_graph:
-            graph_png = agent.get_graph(xray=True).draw_mermaid_png()
-            save_path = Path(graph_name)
-            save_path.write_bytes(graph_png)
-            print(f"Graph image saved to: {save_path}")
-        # config: RunnableConfig = {"configurable": {"thread_id": "1"}}
-        # response = agent.invoke({"theme": "AI在企业运营中的落地实践"}, config=config)
-        # print(response)
-        """"
-        test search_ppt_contents
-        """
-        config: RunnableConfig = {"configurable": {"thread_id": "zwc_test"}}
-        response = agent.invoke(
-            InputSchema(
-                ppt_requirement="我是一个学生，我想给导师做一个有关deepseek的论文的汇报,排版使用上下结构的"
-            ),
-            config=config,
-        )
-        print(response)
-        # origin_state = State(
-        #     ppt_info=PPTInfo(
-        #         target_audience="导师以及同学",
-        #         user_role="学生",
-        #         # purpose="汇报",
-        #         layout_style=LayoutType.TOP_BOTTOM,
-        #         num_pages=10,
-        #         theme="DeekSeek R1的介绍",
-        #     ),
-        #     messages=[],
-        #     ppt_template_path="user_data/zwc_test/template/template.pdf",
-        #     current_timeline=TimeLine.INFO_GATHERED,
-        #     have_ppt_content_files=True,
-        #     ppt_content_source_urls=["https://ghostty.org/docs/install/binary"],
-        #     ppt_content_files_markdown_contents=ppt_content_files_markdown_contents,
-        #     have_ppt_template=False,
-        #     web_fetch_results=web_fetch_results,
-        #     ppt_outline=ppt_outline,
-        #     user_content=user_content,
-        #     ppt_page_contents=ppt_page_contents,
-        #     first_draft_results=first_draft_results,
-        #     user_ppt_style="绿色简约风",
-        # )
-        # fork_config = agent.update_state(
-        #     config, origin_state, as_node="generate_ppt_content_per_page"
-        # )
-        # response = await agent.ainvoke(None, config=fork_config)
-        # # if response["__interrupt__"]:
-        # #     # print("Workflow is interrupted, waiting for user input...")
-        # #     response = agent.ainvoke(Command(resume="绿色简约风"), config=fork_config)
-        # # response = await agent.ainvoke()
-        # print(response)
+        async with AsyncSqliteSaver.from_conn_string("checkpoint.db") as checkpointer:
+            agent = graph.compile(checkpointer=checkpointer)
+            save_graph = True
+            graph_name = "ppt_generation_agent_graph.png"
+            if save_graph:
+                graph_png = agent.get_graph(xray=True).draw_mermaid_png()
+                save_path = Path(graph_name)
+                save_path.write_bytes(graph_png)
+                print(f"Graph image saved to: {save_path}")
+            # config: RunnableConfig = {"configurable": {"thread_id": "1"}}
+            # response = agent.invoke({"theme": "AI在企业运营中的落地实践"}, config=config)
+            # print(response)
+            """"
+            test search_ppt_contents
+            """
+            config: RunnableConfig = {"configurable": {"thread_id": "zwc_test"}}
+            # response = await resume_when_abort("zwc_test")
+            # response = agent.invoke(
+            #     InputSchema(
+            #         ppt_requirement="我是一个学生，我想给导师做一个有关deepseek的论文的汇报,排版使用上下结构的"
+            #     ),
+            #     config=config,
+            # )
+            # response = await agent.ainvoke(
+            #     Command(
+            #         resume={
+            #             "target_audience": "导师以及同学",
+            #             "user_role": "学生",
+            #             "layout_style": "top_bottom",
+            #             "num_pages": 10,
+            #             "theme": "DeekSeek R1的介绍",
+            #         }
+            #     ),
+            #     config=config,
+            # )
+            # print(response)
+
+            origin_state = State(
+                ppt_info=PPTInfo(
+                    target_audience="导师以及同学",
+                    user_role="学生",
+                    # purpose="汇报",
+                    layout_style=LayoutType.TOP_BOTTOM,
+                    num_pages=10,
+                    theme="DeekSeek R1的介绍",
+                ),
+                messages=[],
+                ppt_template_path="user_data/zwc_test/template/template.pdf",
+                # current_timeline=TimeLine.INFO_GATHERED,
+                have_ppt_content_files=False,
+                # ppt_content_source_urls=["https://ghostty.org/docs/install/binary"],
+                # ppt_content_files_markdown_contents=ppt_content_files_markdown_contents,
+                have_ppt_template=False,
+                # web_fetch_results=web_fetch_results,
+                # ppt_outline=ppt_outline,
+                # user_content=user_content,
+                # ppt_page_contents=ppt_page_contents,
+                # first_draft_results=first_draft_results,
+                # user_ppt_style="绿色简约风",
+            )
+            fork_config = await agent.aupdate_state(
+                config, origin_state, as_node="ask_for_ppt_info"
+            )
+            response = await agent.ainvoke(None, config=fork_config, durability="sync")
+            # if response["__interrupt__"]:
+            #     # print("Workflow is interrupted, waiting for user input...")
+            #     response = agent.ainvoke(Command(resume="绿色简约风"), config=fork_config)
+            # response = await agent.ainvoke()
+            print(response)
 
     asyncio.run(main())

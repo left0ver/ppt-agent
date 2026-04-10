@@ -5,6 +5,7 @@ from pathlib import Path
 
 from langchain_core.output_parsers import JsonOutputParser
 from tenacity import retry, stop_after_attempt, wait_fixed
+from agent.constant import USER_DATA_ROOT_DIR
 
 logger = logging.getLogger(__file__)
 
@@ -86,7 +87,9 @@ async def generate_first_draft_task_with_delay(
         await asyncio.sleep(index * delay)
     svg_content = await chain.ainvoke({"page_content": page_content})
     # # 将LLM的输出保存为svg文件
-    svg_file_path = Path(f"user_data/{thread_id}/first_draft/page_{index + 1}.svg")
+    svg_file_path = Path(
+        f"{USER_DATA_ROOT_DIR}/{thread_id}/first_draft/page_{index + 1}.svg"
+    )
 
     svg_file_path.parent.mkdir(parents=True, exist_ok=True)
     svg_file_path.write_text(svg_content, encoding="utf-8")
@@ -107,7 +110,9 @@ async def generate_final_ppt_task_with_delay(
     if delay > 0:
         await asyncio.sleep(index * delay)
 
-    final_ppt_path = Path(f"user_data/{thread_id}/final_ppt/page_{index + 1}.svg")
+    final_ppt_path = Path(
+        f"{USER_DATA_ROOT_DIR}/{thread_id}/final_ppt/page_{index + 1}.svg"
+    )
     svg_content = await chain.ainvoke(
         {
             "first_draft_svg_code": first_draft_result.get("svg_content", ""),

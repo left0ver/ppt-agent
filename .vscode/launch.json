@@ -17,8 +17,8 @@
         "8000",
         "--reload-dir",
         "./backend",
-        "--reload-dir",
-        "./agent"
+        // "--reload-dir",
+        // "./agent"
       ],
       "cwd": "${workspaceFolder}",
       "jinja": true
