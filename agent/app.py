@@ -21,6 +21,7 @@ from build_model import build_model
 from cache_key_func import (
     generate_final_ppt_task_key_func,
     generate_first_draft_task_key_func,
+    generate_ppt_content_per_page_key_func,
 )
 from constant import USER_DATA_ROOT_DIR, InterruptType, LayoutType
 from dotenv import load_dotenv
@@ -671,6 +672,10 @@ graph.add_node("generate_ppt_outline", generate_ppt_outline)
 graph.add_node(
     "generate_ppt_content_per_page",
     generate_ppt_content_per_page,
+    cache_policy=CachePolicy(
+        key_func=generate_ppt_content_per_page_key_func,
+        ttl=None if is_development() else 3600 * 24,
+    ),
 )
 graph.add_node(
     "generate_first_draft_task",
