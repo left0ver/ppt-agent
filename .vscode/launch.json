@@ -4,7 +4,6 @@
   // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
   "version": "0.2.0",
   "configurations": [
-
     {
       "name": "debug FastAPI",
       "type": "debugpy",
@@ -22,6 +21,14 @@
       ],
       "cwd": "${workspaceFolder}",
       "jinja": true
+    },
+    {
+      "name": "debug agent",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "justMyCode": false,
+      "console": "integratedTerminal"
     },
     {
       "name": "debug Streamlit",

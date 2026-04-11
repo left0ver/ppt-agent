@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
-
+import os
 import pymupdf
 
 logger = logging.getLogger(__name__)
@@ -88,3 +88,9 @@ def extract_svg_from_response(response) -> str:
             f"在LLM的返回中没有找到<svg>标签来包裹的内容，请确保LLM按照要求输出，并且输出的内容包含一个合法的SVG字符串。LLM的原始输出是: {response.content}"
         )
     return svg_content
+
+
+
+app_env = os.getenv("APP_ENV", "production")
+def is_development():
+    return app_env == "development"

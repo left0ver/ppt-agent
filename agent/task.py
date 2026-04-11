@@ -3,9 +3,9 @@ import logging
 import re
 from pathlib import Path
 
+from constant import USER_DATA_ROOT_DIR
 from langchain_core.output_parsers import JsonOutputParser
 from tenacity import retry, stop_after_attempt, wait_fixed
-from agent.constant import USER_DATA_ROOT_DIR
 
 logger = logging.getLogger(__file__)
 
@@ -127,3 +127,6 @@ async def generate_final_ppt_task_with_delay(
         "svg_content": svg_content,
         "file_path": str(final_ppt_path),
     }
+
+
+

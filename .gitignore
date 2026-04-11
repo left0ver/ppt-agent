@@ -2,6 +2,13 @@ test
 user_data
 assest
 node_modules
+
+.superpowers/
+*.db
+*.db-shm
+*.db-wal
+docs
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -218,3 +225,4 @@ __marimo__/
 
 # Local git worktrees
 .worktrees/
+
