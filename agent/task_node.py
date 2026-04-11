@@ -1,12 +1,12 @@
 import asyncio
 import logging
-import os
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, cast
 
+from build_model import build_model
 from constant import USER_DATA_ROOT_DIR, LayoutType
+from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig, RunnableLambda
-from langchain_openai import ChatOpenAI
 from langgraph.config import get_stream_writer
 from prompt import (
     ppt_final_draft_prompt_template,
@@ -38,14 +38,11 @@ async def generate_first_draft_task(
     page_type = worker_state["page_type"]
     delay = worker_state["delay"]
     thread_id = config["configurable"]["thread_id"]
-
+    generate_first_draft_model = cast(
+        BaseChatModel, build_model().get("generate_model")
+    )
     if delay > 0:
         await asyncio.sleep(page_index * delay)
-    generate_first_draft_model = ChatOpenAI(
-        model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
 
     match layout_style:
         case LayoutType.TOP_BOTTOM:
@@ -119,11 +116,7 @@ async def generate_final_ppt_task(
     if delay > 0:
         await asyncio.sleep(page_index * delay)
 
-    generate_final_ppt_model = ChatOpenAI(
-        model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
+    generate_final_ppt_model = cast(BaseChatModel, build_model().get("generate_model"))
     chain = (
         ppt_final_draft_prompt_template
         | generate_final_ppt_model

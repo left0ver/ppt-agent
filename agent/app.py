@@ -17,6 +17,7 @@ from typing import (
 )
 
 import json_repair
+from build_model import build_model
 from cache_key_func import (
     generate_final_ppt_task_key_func,
     generate_first_draft_task_key_func,
@@ -82,6 +83,11 @@ from utils import (
 load_dotenv()
 setup_logging()
 logger = logging.getLogger(__file__)
+
+model_info = build_model()
+search_model = model_info["search_model"]
+generate_model = model_info["generate_model"]
+intent_recognition_model = model_info["intent_recognition_model"]
 
 
 class PPTInfo(BaseModel):
@@ -195,13 +201,8 @@ def ask_for_ppt_info(
     writer = get_stream_writer()
     writer({"current_stage": "正在确认PPT的具体需求"})
     thread_id = config["configurable"].get("thread_id")
-    llm = ChatOpenAI(
-        model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
     json_parser = JsonOutputParser()
-    chain = extract_ppt_info_prompt_template | llm | json_parser
+    chain = extract_ppt_info_prompt_template | intent_recognition_model | json_parser
 
     ppt_info = chain.invoke({"user_input": input.ppt_requirement})
 
@@ -262,27 +263,19 @@ def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
     writer({"current_stage": "用户没有上传内容文件，正在根据PPT的相关信息来搜索内容"})
     thread_id = config["configurable"].get("thread_id")
     ppt_info: PPTInfo = state.ppt_info
-    # 设置User-Agent来解决被cf拦截的问题
-    user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-    grok_search_model = ChatOpenAI(
-        model=os.getenv("GROK_SEARCH_MODEL") or "grok-4-1-fast-reasoning",
-        base_url=os.environ["GROK_SEARCH_BASE_URL"],
-        api_key=os.environ["GROK_SEARCH_API_KEY"],
-        default_headers={"User-Agent": user_agent},
-    )
-    chain = grok_search_prompt_template | grok_search_model
+    chain = grok_search_prompt_template | search_model
     # 使用grok的搜索能力来搜索ppt的内容
-    grok_search_response = chain.with_retry().invoke(
+    search_response = chain.with_retry().invoke(
         {
             "theme": ppt_info.theme,
             "target_audience": ppt_info.target_audience,
             "user_role": ppt_info.user_role,
-        }
+        },
     )
     json_parser = JsonOutputParser()
     grok_search_results = json_parser.parse(
-        json_repair.repair_json(grok_search_response.content)
+        json_repair.repair_json(search_response.content)
     )
     urls = [
         result.get("url")
@@ -363,13 +356,6 @@ def parse_ppt_content_files(state: State, runtime: Runtime, config: RunnableConf
     for markdown_file_path in markdown_file_paths:
         markdown_content = markdown_file_path.read_text(encoding="utf-8")
         ppt_content_files_markdown_contents.append(markdown_content)
-
-    with open(
-        f"{USER_DATA_ROOT_DIR}/{thread_id}/ppt_content_files_markdown_contents.json",
-        "w",
-        encoding="utf-8",
-    ) as f:
-        json.dump(ppt_content_files_markdown_contents, f, ensure_ascii=False, indent=2)
     return {
         "ppt_content_files_markdown_contents": ppt_content_files_markdown_contents,
     }
@@ -456,13 +442,9 @@ async def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableC
     context = ""
     for i, item in enumerate(context_list, start=1):
         context += f"# 第{i}部分\n\n{item}\n\n"
-    generate_ppt_outline_model = ChatOpenAI(
-        model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
-    chain = ppt_outline_prompt_template | generate_ppt_outline_model
-    ppt_outline_response = chain.invoke(
+
+    chain = ppt_outline_prompt_template | generate_model
+    ppt_outline_response = await chain.ainvoke(
         {
             "theme": state.ppt_info.theme,
             "user_role": state.ppt_info.user_role,
@@ -479,10 +461,6 @@ async def generate_ppt_outline(state: State, runtime: Runtime, config: RunnableC
     if match:
         ppt_outline_json_str = match.group(1)
         ppt_outline = json_parser.parse(ppt_outline_json_str)["ppt_outline"]
-    with open(
-        f"{USER_DATA_ROOT_DIR}/{thread_id}/ppt_outline.json", "w", encoding="utf-8"
-    ) as f:
-        json.dump(ppt_outline, f, ensure_ascii=False, indent=2)
     if (
         state.ppt_content_files_markdown_contents is not None
         and len(state.ppt_content_files_markdown_contents) > 0
@@ -501,14 +479,7 @@ async def generate_ppt_content_per_page(
     writer({"current_stage": "正在根据大纲来生成PPT每一页的内容"})
     have_ppt_content_files = state.have_ppt_content_files
     thread_id = config["configurable"].get("thread_id")
-    # 设置User-Agent来解决被cf拦截的问题
-    user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    grok_search_model = ChatOpenAI(
-        model=os.getenv("GROK_SEARCH_MODEL") or "grok-4-1-fast-reasoning",
-        base_url=os.environ["GROK_SEARCH_BASE_URL"],
-        api_key=os.environ["GROK_SEARCH_API_KEY"],
-        default_headers={"User-Agent": user_agent},
-    )
+
     ppt_outline_parts = state.ppt_outline["parts"]
     ppt_outline_pages = [
         {"type": "page", "part": i, "page": page}
@@ -520,9 +491,7 @@ async def generate_ppt_content_per_page(
     ppt_part_page_contents: list[dict] = []
     if have_ppt_content_files:
         # 使用用户上传的文件来作为内容的来源
-        chain = (
-            extracted_page_content_from_user_content_prompt_template | grok_search_model
-        )
+        chain = extracted_page_content_from_user_content_prompt_template | search_model
         for i, ppt_outline_page in enumerate(ppt_outline_pages):
             ppt_part_page_contents_task.append(
                 extract_page_content_task_with_delay(
@@ -534,7 +503,7 @@ async def generate_ppt_content_per_page(
         )
 
     else:
-        chain = grok_search_ppt_content_per_page_prompt_template | grok_search_model
+        chain = grok_search_ppt_content_per_page_prompt_template | search_model
         for i, ppt_outline_page in enumerate(ppt_outline_pages):
             ppt_part_page_contents_task.append(
                 search_page_content_task_with_delay(
@@ -699,7 +668,10 @@ graph.add_node("parse_ppt_content_urls", parse_ppt_content_urls)
 # 该节点延迟执行
 graph.add_node("parse_ppt_template", parse_ppt_template, defer=True)
 graph.add_node("generate_ppt_outline", generate_ppt_outline)
-graph.add_node("generate_ppt_content_per_page", generate_ppt_content_per_page)
+graph.add_node(
+    "generate_ppt_content_per_page",
+    generate_ppt_content_per_page,
+)
 graph.add_node(
     "generate_first_draft_task",
     generate_first_draft_task,
