@@ -3,23 +3,27 @@ import logging
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
-from build_model import build_model
-from constant import USER_DATA_ROOT_DIR, LayoutType
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.config import get_stream_writer
-from prompt import (
+from agent.prompt import (
     ppt_final_draft_prompt_template,
     ppt_first_draft_grid_style_prompt_template,
     ppt_first_draft_guide_page_prompt_template,
     ppt_first_draft_Top_Bottom_style_prompt_template,
 )
-from utils import extract_svg_from_response, is_development, verify_svg
+from agent.utils import extract_svg_from_response, verify_svg
+
+from agent.build_model import build_model
+from agent.config import get_config
+from agent.types import LayoutType
 
 logger = logging.getLogger(__file__)
 
+user_config = get_config()
+USER_DATA_ROOT_DIR = user_config.get("USER_DATA_ROOT_DIR")
 
-# 不能使用Base_Model，缓存不会生效，如果使用Base_Model的话需要自定义缓存的方法
+
 class FirstDraftTaskState(TypedDict):
     page_content: str
     page_index: int  # 下标从0开始
@@ -45,15 +49,15 @@ async def generate_first_draft_task(
         await asyncio.sleep(page_index * delay)
 
     match layout_style:
-        case LayoutType.TOP_BOTTOM:
+        case "top_bottom":
             content_page_prompt_template = (
                 ppt_first_draft_Top_Bottom_style_prompt_template
             )
-        case LayoutType.GRID:
+        case "grid":
             content_page_prompt_template = ppt_first_draft_grid_style_prompt_template
         case _:
             raise ValueError(
-                f"不支持的布局风格{layout_style},目前仅支持{[layout.value for layout in LayoutType]}中的布局风格"
+                f"不支持的布局风格{layout_style},目前仅支持{LayoutType.__args__}的布局风格"
             )
     prompt_template = (
         content_page_prompt_template
@@ -82,7 +86,7 @@ async def generate_first_draft_task(
             "first_draft": {
                 "page_index": page_index,
                 "svg_content": ppt_page_content,
-                "file_path": svg_file_path,
+                "file_path": str(svg_file_path),
             }
         }
     )
@@ -91,7 +95,7 @@ async def generate_first_draft_task(
             {
                 "page_index": page_index,
                 "svg_content": ppt_page_content,
-                "file_path": svg_file_path,
+                "file_path": str(svg_file_path),
             }
         ]
     }

@@ -28,4 +28,6 @@ dependencies = [
     "tavily-python>=0.7.23",
     "tenacity>=9.1.4",
     "langchain-xai>=1.2.2",
+    "orjson>=3.11.7",
+    "aiosqlitepool>=1.0.0",
 ]

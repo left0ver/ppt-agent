@@ -3,12 +3,13 @@ import logging
 import re
 from pathlib import Path
 
-from constant import USER_DATA_ROOT_DIR
 from langchain_core.output_parsers import JsonOutputParser
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-logger = logging.getLogger(__file__)
+from agent.config import get_config
 
+logger = logging.getLogger(__file__)
+USER_DATA_ROOT_DIR =  get_config().get("USER_DATA_ROOT_DIR")
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
 async def search_page_content_task_with_delay(

@@ -1,11 +1,17 @@
 import logging
+import os
 import re
 import shutil
 import subprocess
+import time
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
-import os
+
 import pymupdf
+from langgraph.graph.state import CompiledStateGraph
+
+from agent.config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +96,43 @@ def extract_svg_from_response(response) -> str:
     return svg_content
 
 
-
 app_env = os.getenv("APP_ENV", "production")
+
+
 def is_development():
     return app_env == "development"
+
+
+def draw_graph(agent: CompiledStateGraph, save_path: str | Path = "graph.png") -> None:
+    graph_png = agent.get_graph(xray=True).draw_mermaid_png()
+    save_path = Path(save_path)
+    save_path.write_bytes(graph_png)
+    print(f"Graph image saved to: {save_path}")
+
+
+def ensure_session_dirs(thread_id: str) -> Path:
+    USER_DATA_ROOT_DIR = get_config()["USER_DATA_ROOT_DIR"]
+    session_dir = Path(USER_DATA_ROOT_DIR, thread_id)
+    for sub_dir in (
+        session_dir,
+        session_dir / "context_files",
+        session_dir / "context_parse",
+        session_dir / "template",
+        session_dir / "first_draft",
+        session_dir / "final_ppt",
+    ):
+        sub_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+
+def save_file(file_path: Path | str, file_obj):
+    file_path = Path(file_path)
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file_obj, f)
+
+
+def generate_thread_id():
+    """生成thread_id"""
+    return f"{uuid.uuid4()}_{hex(int(time.time()))[2:]}"
+

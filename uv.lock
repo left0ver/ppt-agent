@@ -124,6 +124,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosqlitepool"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/5a/f3184cdfd195a748bbb330894e34e5b274fec0e9b8dfac4c1fc71f36fc8b/aiosqlitepool-1.0.0.tar.gz", hash = "sha256:397f79993d7f34a5740939fb6e52ff29563fad5c400ef8b70990e64331957409", size = 16491, upload-time = "2025-07-11T10:15:43.029Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/65/4d9a7eb8a4cf6a586f14abcce9d774d5b4a986e3c3028a9c88801c9648d2/aiosqlitepool-1.0.0-py3-none-any.whl", hash = "sha256:832acb166bb9afef7f46b320d024b343083c90f4eb4bdc8c0d794a79e1fd1b4d", size = 12946, upload-time = "2025-07-11T10:15:41.953Z" },
+]
+
+[[package]]
 name = "altair"
 version = "6.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2229,6 +2238,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiosqlite" },
+    { name = "aiosqlitepool" },
     { name = "aspose-slides" },
     { name = "cairosvg" },
     { name = "fastapi", extra = ["standard"] },
@@ -2244,6 +2254,7 @@ dependencies = [
     { name = "langgraph-checkpoint-sqlite" },
     { name = "langgraph-cli", extra = ["inmem"] },
     { name = "mineru-kie-sdk" },
+    { name = "orjson" },
     { name = "pymupdf" },
     { name = "python-multipart" },
     { name = "python-pptx" },
@@ -2256,6 +2267,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
+    { name = "aiosqlitepool", specifier = ">=1.0.0" },
     { name = "aspose-slides", specifier = ">=26.3.0" },
     { name = "cairosvg", specifier = ">=2.9.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.135.2" },
@@ -2271,6 +2283,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.0.3" },
     { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.4.19" },
     { name = "mineru-kie-sdk", specifier = ">=0.1.1" },
+    { name = "orjson", specifier = ">=3.11.7" },
     { name = "pymupdf", specifier = ">=1.27.2.2" },
     { name = "python-multipart", specifier = ">=0.0.22" },
     { name = "python-pptx", specifier = ">=1.0.2" },

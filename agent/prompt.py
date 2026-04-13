@@ -1,7 +1,8 @@
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-from constant import LayoutType
 
-layout_options = [layout.value for layout in LayoutType]
+from agent.types import LayoutType
+
+layout_options = LayoutType.__args__
 # 提取用户的ppt的相关信息的提示词
 extract_ppt_info_prompt_template = PromptTemplate.from_template(
     template_format="mustache",
@@ -14,7 +15,7 @@ extract_ppt_info_prompt_template = PromptTemplate.from_template(
 
 # Data Schema (提取目标字段)
 1. target_audience (字符串 | null)【可选值有"""
-    + ", ".join(layout_options)
+    + ",".join(layout_options)
     + """】: PPT的目标群体或听众对象。
 2. user_role (字符串 | null): 用户的角色或身份（例如：软件工程师、学生、产品经理等）。
 3. num_pages (整数 | null): PPT的期望页数。必须是介于 1 到 30 之间的整数。
