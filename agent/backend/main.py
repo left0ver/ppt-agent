@@ -50,7 +50,6 @@ def create_session_id() -> dict[str, str]:
 
 @app.get("/layout_styles")
 def get_layout_styles():
-    # options = [layout.value for layout in LayoutType]
 
     return {"layout_styles": LayoutType.__args__}
 
@@ -59,7 +58,6 @@ def get_layout_styles():
 def upload_content_files(
     thread_id: str = Form(...), files: list[UploadFile] = File(default_factory=list)
 ) -> dict[str, Any]:
-    saved_files: list[dict[str, Any]] = []
     allowed_extensions = {".pdf", ".docx", ".markdown", ".md"}
     # 最大20MB
     MAX_FILE_SIZE = 1024 * 1024 * 20

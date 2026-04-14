@@ -64,10 +64,6 @@ def ask_for_ppt_info(
 
     ppt_info = chain.invoke({"user_input": input.ppt_requirement})
 
-    # 前端让用户进行编辑，前端需要保证所有的信息不为None
-    # ppt_info = interrupt(
-    #     {"title": "ppt的相关信息", "type": InterruptType.EDIT, "payload": ppt_info}
-    # )
     ppt_info_from_user: dict = interrupt(
         PPTInfoInterruptValues(
             title="请确认或者修改以下PPT的相关信息，确认无误后点击提交",
@@ -81,13 +77,6 @@ def ask_for_ppt_info(
         user_role=ppt_info_from_user["user_role"],
         layout_style=ppt_info_from_user["layout_style"],
     )
-    # ppt_content_source_from_user = interrupt(
-    #     {
-    #         "title": "你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过",
-    #         "type": InterruptType.UPLOAD_PPT_CONTENT_FILES,
-    #         "file_type": ["pdf", "docx", "markdown", "md"],
-    #     }
-    # )
 
     ppt_content_source_from_user = interrupt(
         UploadPPTContentFilesInterruptValues(
@@ -100,13 +89,6 @@ def ask_for_ppt_info(
         ppt_content_source_from_user.get("ppt_content_source_urls", None),
     )
 
-    # ppt_template_info = interrupt(
-    #     {
-    #         "title": "你可以上传一个PPT模板文件，如果没有可以直接跳过",
-    #         "type": InterruptType.UPLOAD_PPT_TEMPLATE,
-    #         "file_type": ["pptx", "pdf"],
-    #     }
-    # )
     ppt_template_info = interrupt(
         UploadPPTTemplateInterruptValues(
             title="你可以上传一个PPT模板文件，如果没有可以直接跳过",
@@ -450,12 +432,6 @@ async def generate_ppt_content_per_page(
         # 结尾页
         + [{"type": "end_page", "content": end_page_content, "speaker_notes": ""}]
     )
-    # with open(
-    #     f"{USER_DATA_ROOT_DIR}/{thread_id}/ppt_page_contents.json",
-    #     "w",
-    #     encoding="utf-8",
-    # ) as f:
-    #     json.dump(ppt_page_contents, f, ensure_ascii=False, indent=2)
     writer({"current_stage": "正在生成PPT的初稿"})
     return {
         "ppt_page_contents": ppt_page_contents,
@@ -488,13 +464,6 @@ def assign_generate_first_draft_task(state: State):
 def ask_for_style(state: State, runtime: Runtime, config: RunnableConfig):
     writer = get_stream_writer()
     writer({"current_stage": "正在确认需要的PPT风格"})
-    # 使用中断来让给用户确定PPT的风格
-    # user_ppt_style = interrupt(
-    #     {
-    #         "title": "请输入你想要的PPT的整体风格(包含颜色+风格)，例如绿色简约风，黑色科技风等",
-    #         "type": InterruptType.INPUT,
-    #     }
-    # )
     user_ppt_style_info = interrupt(
         PPTStyleInterruptValues(
             title="请输入你想要的PPT的整体风格(包含颜色+风格)，例如绿色简约风，黑色科技风等",

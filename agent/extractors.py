@@ -1,9 +1,10 @@
+import os
 from abc import ABC, abstractmethod
 from typing import Any
-from tavily import TavilyClient
+
 from firecrawl import Firecrawl
+from tavily import TavilyClient
 from tenacity import retry, stop_after_attempt, wait_exponential
-import os
 
 
 class PageExtractor(ABC):
