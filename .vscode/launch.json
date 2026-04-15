@@ -11,14 +11,14 @@
       "request": "launch",
       "module": "uvicorn",
       "args": [
-        "agent.backend.main:app",
+        "src.backend.main:app",
         "--reload",
         "--port",
         "8000",
         "--reload-dir",
-        "./agent",
-        // "--reload-dir",
-        // "./agent"
+        "./src/backend",
+        "--reload-dir",
+        "./src/ppt_agent",
       ],
       "cwd": "${workspaceFolder}",
       "jinja": true

@@ -2,7 +2,7 @@ test
 user_data
 assest
 node_modules
-
+test.env
 .superpowers/
 *.db
 *.db-shm
