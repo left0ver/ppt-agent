@@ -1,19 +1,31 @@
 import { Button, Input } from 'antd'
 import { useState } from 'react'
 
+export type ComposerActionMode = 'send' | 'cancel' | 'continue'
+
 export type ComposerProps = {
-  disabled: boolean
-  loading: boolean
+  actionDisabled: boolean
+  actionMode: ComposerActionMode
+  inputDisabled: boolean
   onSubmit: (prompt: string) => Promise<void> | void
+  onCancel: () => Promise<void> | void
+  onContinue: () => Promise<void> | void
 }
 
-export default function Composer({ disabled, loading, onSubmit }: ComposerProps) {
+export default function Composer({
+  actionDisabled,
+  actionMode,
+  inputDisabled,
+  onSubmit,
+  onCancel,
+  onContinue,
+}: ComposerProps) {
   const [value, setValue] = useState('')
 
   async function handleSubmit() {
     const trimmedValue = value.trim()
 
-    if (!trimmedValue || disabled || loading) {
+    if (!trimmedValue || inputDisabled || actionMode !== 'send') {
       return
     }
 
@@ -21,19 +33,45 @@ export default function Composer({ disabled, loading, onSubmit }: ComposerProps)
     await onSubmit(trimmedValue)
   }
 
+  async function handleAction() {
+    if (actionDisabled) {
+      return
+    }
+
+    if (actionMode === 'send') {
+      await handleSubmit()
+      return
+    }
+
+    if (actionMode === 'cancel') {
+      await onCancel()
+      return
+    }
+
+    await onContinue()
+  }
+
+  const actionLabel = actionMode === 'continue' ? '继续' : actionMode === 'cancel' ? '取消' : '发送'
+  const actionAriaLabel =
+    actionMode === 'continue'
+      ? '继续'
+      : actionMode === 'cancel'
+        ? '取消当前生成'
+        : '发送'
+
   return (
     <form
       aria-label="PPT 需求输入"
       className="chat-composer"
       onSubmit={(event) => {
         event.preventDefault()
-        void handleSubmit()
+        void handleAction()
       }}
     >
       <div className="chat-composer__surface">
         <Input.TextArea
           aria-label="输入 PPT 需求"
-          disabled={disabled}
+          disabled={inputDisabled}
           className="chat-composer__input"
           placeholder="我是学生，我需要向导师介绍deepseekR1的论文，PPT页数大概为10页，布局风格采用网格布局方式"
           rows={3}
@@ -50,15 +88,23 @@ export default function Composer({ disabled, loading, onSubmit }: ComposerProps)
 
         <div className="chat-composer__footer">
           <Button
-            aria-label="发送"
-            className="chat-composer__submit"
-            disabled={disabled || loading}
+            aria-label={actionAriaLabel}
+            className={`chat-composer__submit${
+              actionMode === 'cancel' ? ' chat-composer__submit--cancel' : ''
+            }`}
+            disabled={actionDisabled}
             htmlType="submit"
-            loading={loading}
             size="large"
             type="primary"
           >
-            {loading ? '发送中...' : '发送'}
+            {actionMode === 'cancel' ? (
+              <span className="chat-composer__submit-status">
+                <span className="chat-composer__submit-spinner" aria-hidden="true" />
+                {actionLabel}
+              </span>
+            ) : (
+              actionLabel
+            )}
           </Button>
         </div>
       </div>

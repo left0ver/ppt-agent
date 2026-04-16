@@ -134,6 +134,32 @@ export async function getLayoutStyles(
   return response.json()
 }
 
+export async function cancelAgent({
+  threadId,
+}: {
+  threadId: string
+}): Promise<{
+  resumable: boolean
+  status: string
+  thread_id: string
+}> {
+  const response = await fetch(`${API_BASE}/cancel`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      thread_id: threadId,
+    }),
+  })
+
+  if (!response.ok) {
+    throw await response.text()
+  }
+
+  return response.json()
+}
+
 type UploadContentFilesParams = {
   threadId: string
   files: File[]

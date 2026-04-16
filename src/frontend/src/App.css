@@ -337,6 +337,31 @@
   border-radius: 999px;
 }
 
+.chat-composer__submit-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-composer__submit-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  animation: chat-composer-spin 0.9s linear infinite;
+}
+
+@keyframes chat-composer-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .interrupt-card {
   height: auto;
   min-width: min(680px, 100%);

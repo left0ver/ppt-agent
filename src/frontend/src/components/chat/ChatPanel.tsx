@@ -1,6 +1,7 @@
 import { Badge, Card, Tag, Typography } from 'antd'
 import type { LayoutStyle, ChatMessage, ThreadStatus } from '../../types/ppt-agent'
 import Composer from './Composer'
+import type { ComposerActionMode } from './Composer'
 import MessageList from './MessageList'
 import type {
   InterruptSkipHandler,
@@ -18,25 +19,31 @@ const threadStatusText: Record<ThreadStatus, string> = {
 
 export type ChatPanelProps = {
   messages: ChatMessage[]
-  composerDisabled: boolean
-  composerLoading: boolean
+  composerActionDisabled: boolean
+  composerActionMode: ComposerActionMode
+  composerInputDisabled: boolean
   layoutStyleOptions?: LayoutStyle[]
   resolvedInterruptMessageIds?: string[]
   threadId?: string | null
   threadStatus?: ThreadStatus
   onComposerSubmit: (prompt: string) => Promise<void> | void
+  onComposerCancel: () => Promise<void> | void
+  onComposerContinue: () => Promise<void> | void
   onInterruptSubmit: InterruptSubmitHandler
   onInterruptSkip: InterruptSkipHandler
 }
 
 export default function ChatPanel({
   messages,
-  composerDisabled,
-  composerLoading,
+  composerActionDisabled,
+  composerActionMode,
+  composerInputDisabled,
   layoutStyleOptions,
   resolvedInterruptMessageIds,
   threadId,
   threadStatus = 'ready',
+  onComposerCancel,
+  onComposerContinue,
   onComposerSubmit,
   onInterruptSubmit,
   onInterruptSkip,
@@ -68,8 +75,11 @@ export default function ChatPanel({
       />
 
       <Composer
-        disabled={composerDisabled}
-        loading={composerLoading}
+        actionDisabled={composerActionDisabled}
+        actionMode={composerActionMode}
+        inputDisabled={composerInputDisabled}
+        onCancel={onComposerCancel}
+        onContinue={onComposerContinue}
         onSubmit={onComposerSubmit}
       />
     </Card>

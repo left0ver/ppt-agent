@@ -44,13 +44,16 @@ export default function AppShell({ session }: AppShellProps) {
 
           <section className="app-shell__chat-column">
             <ChatPanel
-              composerDisabled={session.composerDisabled}
-              composerLoading={session.composerLoading}
+              composerActionDisabled={session.composerActionDisabled}
+              composerActionMode={session.composerActionMode}
+              composerInputDisabled={session.composerInputDisabled}
               layoutStyleOptions={session.layoutStyleOptions}
               messages={session.state.messages}
               resolvedInterruptMessageIds={session.resolvedInterruptMessageIds}
               threadId={session.state.threadId}
               threadStatus={session.state.threadStatus}
+              onComposerCancel={session.cancelGeneration}
+              onComposerContinue={session.continueGeneration}
               onComposerSubmit={session.start}
               onInterruptSkip={session.skipInterrupt}
               onInterruptSubmit={session.submitInterrupt}

@@ -8,6 +8,7 @@ import type {
   LayoutStyle,
 } from '../types/ppt-agent'
 import {
+  cancelAgent,
   createSessionId,
   getLayoutStyles,
   normalizeApiError,
@@ -27,6 +28,7 @@ import type {
   TemplateUploadSubmitPayload,
 } from '../components/interrupts/TemplateUploadInterruptCard'
 import type { DeckVersion, SlidePreview } from '../components/preview/PreviewSidebar'
+import type { ComposerActionMode } from '../components/chat/Composer'
 
 const DEFAULT_LAYOUT_STYLES: LayoutStyle[] = ['top_bottom', 'grid']
 
@@ -187,7 +189,8 @@ function buildSkipResumePayload(context: InterruptActionContext): Record<string,
 export function usePptAgentSession() {
   const [state, dispatch] = useReducer(sessionReducer, undefined, createInitialSessionState)
   const [bootError, setBootError] = useState<string | null>(null)
-  const [composerLoading, setComposerLoading] = useState(false)
+  const [composerActionMode, setComposerActionMode] = useState<ComposerActionMode>('send')
+  const [composerActionPending, setComposerActionPending] = useState(false)
   const [layoutStyleOptions, setLayoutStyleOptions] =
     useState<LayoutStyle[]>(DEFAULT_LAYOUT_STYLES)
   const [draftSlides, setDraftSlides] = useState<SlidePreview[]>([])
@@ -198,6 +201,7 @@ export function usePptAgentSession() {
   const [resolvedInterruptMessageIds, setResolvedInterruptMessageIds] = useState<string[]>([])
   const [exportLoading, setExportLoading] = useState(false)
   const streamAbortRef = useRef<AbortController | null>(null)
+  const cancelledForResumeRef = useRef(false)
 
   const slides = activeDeckVersion === 'draft' ? draftSlides : finalSlides
   const selectedSlideById = selectedSlideId
@@ -208,9 +212,27 @@ export function usePptAgentSession() {
     : -1
   const selectedSlide = selectedSlideIndex >= 0 ? slides[selectedSlideIndex] ?? null : null
 
-  const composerDisabled = useMemo(
-    () => state.threadStatus !== 'ready' || state.composerLocked,
-    [state.composerLocked, state.threadStatus],
+  const composerInputDisabled = useMemo(
+    () =>
+      composerActionMode !== 'send' ||
+      state.threadStatus !== 'ready' ||
+      state.composerLocked,
+    [composerActionMode, state.composerLocked, state.threadStatus],
+  )
+
+  const composerActionDisabled = useMemo(
+    () => {
+      if (composerActionPending) {
+        return true
+      }
+
+      if (composerActionMode === 'send') {
+        return state.threadStatus !== 'ready' || state.composerLocked
+      }
+
+      return false
+    },
+    [composerActionMode, composerActionPending, state.composerLocked, state.threadStatus],
   )
 
   useEffect(() => {
@@ -234,6 +256,9 @@ export function usePptAgentSession() {
         setSelectedSlideId(null)
         setViewerOpen(false)
         setResolvedInterruptMessageIds([])
+        cancelledForResumeRef.current = false
+        setComposerActionMode('send')
+        setComposerActionPending(false)
         dispatch({
           type: 'thread_ready',
           threadId: sessionResult.value.thread_id,
@@ -266,7 +291,7 @@ export function usePptAgentSession() {
     threadId: string
     type: 'start' | 'hitl_resume' | 'abort_resume'
     userInput: string | Record<string, unknown> | null
-  }) {
+  }): Promise<'completed' | 'aborted' | 'errored'> {
     streamAbortRef.current?.abort()
     const controller = new AbortController()
     const flags = {
@@ -333,7 +358,7 @@ export function usePptAgentSession() {
       })
     } catch (error) {
       if (controller.signal.aborted) {
-        return
+        return 'aborted'
       }
 
       dispatch({
@@ -341,7 +366,7 @@ export function usePptAgentSession() {
         threadId,
         text: normalizeApiError(error).message,
       })
-      return
+      return 'errored'
     } finally {
       if (streamAbortRef.current === controller) {
         streamAbortRef.current = null
@@ -363,6 +388,8 @@ export function usePptAgentSession() {
         text: '终稿已生成，可切换到终稿查看完整页面。',
       })
     }
+
+    return 'completed'
   }
 
   async function start(prompt: string) {
@@ -370,7 +397,8 @@ export function usePptAgentSession() {
       return
     }
 
-    setComposerLoading(true)
+    cancelledForResumeRef.current = false
+    setComposerActionMode('cancel')
     dispatch({
       type: 'start_submitted',
       threadId: state.threadId,
@@ -383,7 +411,50 @@ export function usePptAgentSession() {
       userInput: prompt,
     })
 
-    setComposerLoading(false)
+    if (!cancelledForResumeRef.current) {
+      setComposerActionMode('send')
+    }
+  }
+
+  async function cancelGeneration() {
+    if (!state.threadId || composerActionMode !== 'cancel' || composerActionPending) {
+      return
+    }
+
+    setComposerActionPending(true)
+
+    try {
+      await cancelAgent({
+        threadId: state.threadId,
+      })
+      cancelledForResumeRef.current = true
+      streamAbortRef.current?.abort()
+      setComposerActionMode('continue')
+      void message.success('已暂停当前生成，可点击继续恢复执行。')
+    } catch (error) {
+      void message.error(normalizeApiError(error).message)
+    } finally {
+      setComposerActionPending(false)
+    }
+  }
+
+  async function continueGeneration() {
+    if (!state.threadId || composerActionMode !== 'continue' || composerActionPending) {
+      return
+    }
+
+    cancelledForResumeRef.current = false
+    setComposerActionMode('cancel')
+
+    await runChatStream({
+      threadId: state.threadId,
+      type: 'abort_resume',
+      userInput: null,
+    })
+
+    if (!cancelledForResumeRef.current) {
+      setComposerActionMode('send')
+    }
   }
 
   async function submitInterrupt(
@@ -446,11 +517,17 @@ export function usePptAgentSession() {
         text: summarizeInterruptResponse(context, payload),
       })
 
+      cancelledForResumeRef.current = false
+      setComposerActionMode('cancel')
       await runChatStream({
         threadId: state.threadId,
         type: 'hitl_resume',
         userInput: resumePayload,
       })
+
+      if (!cancelledForResumeRef.current) {
+        setComposerActionMode('send')
+      }
     } catch (error) {
       dispatch({
         type: 'error_received',
@@ -479,11 +556,17 @@ export function usePptAgentSession() {
       text: summarizeInterruptSkip(context),
     })
 
+    cancelledForResumeRef.current = false
+    setComposerActionMode('cancel')
     await runChatStream({
       threadId: state.threadId,
       type: 'hitl_resume',
       userInput: resumePayload,
     })
+
+    if (!cancelledForResumeRef.current) {
+      setComposerActionMode('send')
+    }
   }
 
   async function exportDeck() {
@@ -544,8 +627,11 @@ export function usePptAgentSession() {
     canViewDraft: draftSlides.length > 0,
     canViewFinal: finalSlides.length > 0,
     changeDeckVersion,
-    composerDisabled,
-    composerLoading,
+    composerActionDisabled,
+    composerActionMode,
+    composerInputDisabled,
+    cancelGeneration,
+    continueGeneration,
     exportDeck,
     exportLoading,
     layoutStyleOptions,

@@ -212,9 +212,12 @@ function ChatComposerLockHarness() {
 
   return (
     <ChatPanel
-      composerDisabled={composerLocked}
-      composerLoading={false}
+      composerActionDisabled={composerLocked}
+      composerActionMode="send"
+      composerInputDisabled={composerLocked}
       messages={messages}
+      onComposerCancel={() => {}}
+      onComposerContinue={() => {}}
       onComposerSubmit={(prompt) => {
         setMessages((currentMessages) => [
           ...currentMessages,
@@ -244,9 +247,12 @@ function ChatAutoScrollHarness() {
   return (
     <div>
       <ChatPanel
-        composerDisabled={false}
-        composerLoading={false}
+        composerActionDisabled={false}
+        composerActionMode="send"
+        composerInputDisabled={false}
         messages={messages}
+        onComposerCancel={() => {}}
+        onComposerContinue={() => {}}
         onComposerSubmit={() => {}}
         onInterruptSkip={() => {}}
         onInterruptSubmit={() => {}}
@@ -283,10 +289,13 @@ function InterruptHarness({
 }) {
   return (
     <ChatPanel
-      composerDisabled
-      composerLoading={false}
+      composerActionDisabled
+      composerActionMode="send"
+      composerInputDisabled
       messages={messages}
       resolvedInterruptMessageIds={resolvedInterruptMessageIds}
+      onComposerCancel={() => {}}
+      onComposerContinue={() => {}}
       onComposerSubmit={() => {}}
       onInterruptSkip={onSkip}
       onInterruptSubmit={onSubmit}
@@ -444,6 +453,63 @@ describe('App preview integration', () => {
     expect(within(screen.getByLabelText('用户')).getByText('做一份 AI 行业分析')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: '输入 PPT 需求' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+  })
+
+  it('cancels an active run and continues it with abort_resume', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const runningStream = new Promise<Response>(() => {})
+
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
+          status: 200,
+        }),
+      )
+      .mockReturnValueOnce(runningStream)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            thread_id: 'thread-1',
+            status: 'cancelled',
+            resumable: true,
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: current_stage\ndata: {"type":"current_stage","data":"已恢复执行"}\n\n',
+        ),
+      )
+
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
+      target: { value: '帮我做一个 DeepSeek 汇报' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(screen.getByRole('textbox', { name: '输入 PPT 需求' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '取消当前生成' })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: '取消当前生成' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    })
+    expect(getRequestBody(fetchMock, 3)).toContain('"thread_id":"thread-1"')
+    expect(screen.getByRole('button', { name: '继续' })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: '继续' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(5)
+    })
+    expect(getRequestBody(fetchMock, 4)).toContain('"type":"abort_resume"')
+    expect(getRequestBody(fetchMock, 4)).toContain('"user_input":null')
   })
 
   it('auto-scrolls the timeline when a new message arrives', async () => {
