@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterable
@@ -26,6 +27,7 @@ from src.ppt_agent.utils import (
 setup_logging()
 logger = logging.getLogger(__file__)
 
+
 async def connection_factory():
     config = get_config()
     return await aiosqlite.connect(config["checkpoint_path"])
@@ -33,6 +35,7 @@ async def connection_factory():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.running_agent_tasks = {}
 
     if is_development():
         app.state.agent = await PPTAgent.create(pool=None)
@@ -49,6 +52,23 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="PPT Agent API", version="0.1.0", root_path="/api", lifespan=lifespan
 )
+
+
+def _get_running_agent_tasks() -> dict[str, asyncio.Task[Any]]:
+    running_agent_tasks = getattr(app.state, "running_agent_tasks", None)
+    if running_agent_tasks is None:
+        running_agent_tasks = {}
+        app.state.running_agent_tasks = running_agent_tasks
+    return running_agent_tasks
+
+
+def _get_inflight_task(thread_id: str) -> asyncio.Task[Any] | None:
+    running_agent_tasks = _get_running_agent_tasks()
+    task = running_agent_tasks.get(thread_id)
+    if task is not None and task.done():
+        running_agent_tasks.pop(thread_id, None)
+        return None
+    return task
 
 
 @app.get("/create_session_id")
@@ -140,6 +160,35 @@ class ChatRequest(BaseModel):
     )
 
 
+class CancelRequest(BaseModel):
+    thread_id: str = Field(..., description="会话ID")
+
+
+@app.post("/cancel")
+async def cancel_agent(
+    request: Annotated[CancelRequest, Body(embed=False)],
+) -> dict[str, Any]:
+    thread_id = request.thread_id
+    running_agent_tasks = _get_running_agent_tasks()
+    task = _get_inflight_task(thread_id)
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no running agent found for current session:{thread_id}",
+        )
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        logger.info("Agent execution cancelled for thread_id=%s", thread_id)
+    finally:
+        if running_agent_tasks.get(thread_id) is task:
+            running_agent_tasks.pop(thread_id, None)
+
+    return {"thread_id": thread_id, "status": "cancelled", "resumable": True}
+
+
 @app.post("/chat")
 async def chat(
     request: Annotated[ChatRequest, Body(embed=False)],
@@ -148,29 +197,47 @@ async def chat(
     thread_id = request.thread_id
     chat_type = request.type
     user_input = request.user_input
+    running_agent_tasks = _get_running_agent_tasks()
+    inflight_task = _get_inflight_task(thread_id)
+    current_task = asyncio.current_task()
 
-    if chat_type == "start":
-        async for chunk in start_ppt_agent(
-            agent,
-            ppt_requirement=user_input,
-            thread_id=thread_id,
-        ):
-            yield chunk
+    if inflight_task is not None and inflight_task is not current_task:
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent is already running for current session:{thread_id}",
+        )
+    if current_task is not None:
+        running_agent_tasks[thread_id] = current_task
 
-    elif chat_type == "hitl_resume":
-        async for chunk in resume_ppt_agent(
-            agent,
-            user_input=user_input,
-            thread_id=thread_id,
-        ):
-            yield chunk
-    elif chat_type == "abort_resume":
-        async for chunk in resume_ppt_agent(
-            agent,
-            user_input=None,
-            thread_id=thread_id,
-        ):
-            yield chunk
+    try:
+        if chat_type == "start":
+            async for chunk in start_ppt_agent(
+                agent,
+                ppt_requirement=user_input,
+                thread_id=thread_id,
+            ):
+                yield chunk
+
+        elif chat_type == "hitl_resume":
+            async for chunk in resume_ppt_agent(
+                agent,
+                user_input=user_input,
+                thread_id=thread_id,
+            ):
+                yield chunk
+        elif chat_type == "abort_resume":
+            async for chunk in resume_ppt_agent(
+                agent,
+                user_input=None,
+                thread_id=thread_id,
+            ):
+                yield chunk
+    except asyncio.CancelledError:
+        logger.info("Streaming chat request cancelled for thread_id=%s", thread_id)
+        return
+    finally:
+        if current_task is not None and running_agent_tasks.get(thread_id) is current_task:
+            running_agent_tasks.pop(thread_id, None)
 
 
 app.add_middleware(
