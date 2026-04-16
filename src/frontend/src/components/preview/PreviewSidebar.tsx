@@ -15,10 +15,13 @@ interface PreviewSidebarProps {
   activeDeckVersion: DeckVersion
   canViewDraft: boolean
   canViewFinal: boolean
+  exportDisabled?: boolean
+  exportLoading?: boolean
   selectedSlideIndex: number
   selectedSlideId?: string | null
   slides: SlidePreview[]
   onDeckVersionChange: (version: DeckVersion) => void
+  onExport?: () => Promise<void> | void
   onThumbnailClick: (slideIndex: number) => void
   onThumbnailSelect?: (selection: { slideId: string; slideIndex: number }) => void
 }
@@ -27,10 +30,13 @@ export default function PreviewSidebar({
   activeDeckVersion,
   canViewDraft,
   canViewFinal,
+  exportDisabled = false,
+  exportLoading = false,
   selectedSlideIndex,
   selectedSlideId,
   slides,
   onDeckVersionChange,
+  onExport,
   onThumbnailClick,
   onThumbnailSelect,
 }: PreviewSidebarProps) {
@@ -55,28 +61,39 @@ export default function PreviewSidebar({
         </Tag>
       </div>
 
-      <div
-        aria-label="预览版本切换"
-        className="preview-sidebar__switch"
-        role="group"
-      >
-        <Button
-          aria-label="初稿"
-          aria-pressed={activeDeckVersion === 'draft'}
-          disabled={!canViewDraft}
-          type={activeDeckVersion === 'draft' ? 'primary' : 'default'}
-          onClick={() => onDeckVersionChange('draft')}
+      <div className="preview-sidebar__toolbar">
+        <div
+          aria-label="预览版本切换"
+          className="preview-sidebar__switch"
+          role="group"
         >
-          初稿
-        </Button>
+          <Button
+            aria-label="初稿"
+            aria-pressed={activeDeckVersion === 'draft'}
+            disabled={!canViewDraft}
+            type={activeDeckVersion === 'draft' ? 'primary' : 'default'}
+            onClick={() => onDeckVersionChange('draft')}
+          >
+            初稿
+          </Button>
+          <Button
+            aria-label="终稿"
+            aria-pressed={activeDeckVersion === 'final'}
+            disabled={!canViewFinal}
+            type={activeDeckVersion === 'final' ? 'primary' : 'default'}
+            onClick={() => onDeckVersionChange('final')}
+          >
+            终稿
+          </Button>
+        </div>
         <Button
-          aria-label="终稿"
-          aria-pressed={activeDeckVersion === 'final'}
-          disabled={!canViewFinal}
-          type={activeDeckVersion === 'final' ? 'primary' : 'default'}
-          onClick={() => onDeckVersionChange('final')}
+          aria-label="导出 PPT"
+          className="preview-sidebar__export"
+          disabled={exportDisabled}
+          loading={exportLoading}
+          onClick={() => void onExport?.()}
         >
-          终稿
+          导出 PPT
         </Button>
       </div>
 

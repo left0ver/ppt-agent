@@ -15,7 +15,38 @@ import PreviewSidebar, {
   type DeckVersion,
   type SlidePreview,
 } from '../components/preview/PreviewSidebar'
+import { exportSlidesAsPpt } from '../lib/ppt-export'
 import type { ChatMessage } from '../types/ppt-agent'
+
+const pptWriteFileMock = vi.fn<() => Promise<void>>()
+const pptAddImageMock = vi.fn()
+const pptInstances: Array<{
+  layout: string
+  slides: Array<{
+    addImage: typeof pptAddImageMock
+  }>
+}> = []
+
+vi.mock('pptxgenjs', () => ({
+  default: class MockPptxGenJS {
+    layout = ''
+    slides: Array<{ addImage: typeof pptAddImageMock }> = []
+
+    constructor() {
+      pptInstances.push(this)
+    }
+
+    addSlide() {
+      const slide = {
+        addImage: pptAddImageMock,
+      }
+      this.slides.push(slide)
+      return slide
+    }
+
+    writeFile = pptWriteFileMock
+  },
+}))
 
 function createSseResponse(...frames: string[]) {
   return new Response(frames.join(''), {
@@ -224,6 +255,9 @@ function InterruptHarness({
 
 afterEach(() => {
   vi.restoreAllMocks()
+  pptWriteFileMock.mockReset()
+  pptAddImageMock.mockReset()
+  pptInstances.length = 0
 })
 
 describe('App preview integration', () => {
@@ -327,11 +361,12 @@ describe('App preview integration', () => {
       expect(onSubmit).toHaveBeenCalledTimes(1)
     })
     expect(onSubmit).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
+        messageId: 'message-edit-1',
         interruptId: 'interrupt-envelope-edit-1',
         interruptType: 'edit_form',
         interruptTitle: '补充演示文稿信息',
-      },
+      }),
       expect.objectContaining({
         num_pages: 18,
         theme: 'AI 营销方案',
@@ -374,11 +409,14 @@ describe('App preview integration', () => {
     fireEvent.click(skipButton)
 
     expect(onSkip).toHaveBeenCalledTimes(1)
-    expect(onSkip).toHaveBeenCalledWith({
-      interruptId: 'interrupt-envelope-content-1',
-      interruptType: 'upload_ppt_content_files',
-      interruptTitle: '上传内容文件',
-    })
+    expect(onSkip).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 'message-content-1',
+        interruptId: 'interrupt-envelope-content-1',
+        interruptType: 'upload_ppt_content_files',
+        interruptTitle: '上传内容文件',
+      }),
+    )
     expect(skipButton).toBeDisabled()
 
     resolveSkip?.()
@@ -402,7 +440,8 @@ describe('App preview integration', () => {
 
     render(<App />)
 
-    expect(await screen.findByText('One active run per fresh session')).toBeInTheDocument()
+    expect(await screen.findByText('对话工作区')).toBeInTheDocument()
+    expect(screen.queryByText('One active run per fresh session')).not.toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/create_session_id'),
       expect.objectContaining({ method: 'GET' }),
@@ -502,5 +541,160 @@ describe('App preview integration', () => {
     expect(getRequestBody(fetchMock, 3)).toContain('"have_ppt_content_files":false')
     expect(getRequestBody(fetchMock, 3)).toContain('"ppt_content_source_urls":null')
     expect(getRequestBody(fetchMock, 3)).not.toContain('"type":"abort_resume"')
+  })
+
+  it('keeps a handled interrupt card read-only after the user skips it', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: interrupts\ndata: {"type":"interrupts","data":[{"id":"interrupt-content-1","value":{"title":"你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过","type":"upload_ppt_content_files","file_type":["pdf","docx","markdown","md"]}}]}\n\n',
+        ),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: current_stage\ndata: {"type":"current_stage","data":"已跳过内容资料并继续执行"}\n\n',
+        ),
+      )
+
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
+      target: { value: '帮我做一个 DeepSeek 汇报' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+
+    await screen.findByText('你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过')
+    fireEvent.click(screen.getByRole('button', { name: '跳过' }))
+
+    await screen.findByText('已跳过内容资料并继续执行')
+
+    expect(screen.getByRole('button', { name: '跳过' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '提交' })).toBeDisabled()
+    expect(screen.getByRole('textbox', { name: '内容来源网址' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '选择内容文件' })).toBeDisabled()
+  })
+
+  it('keeps only the handled interrupt read-only when later interrupts reuse the same backend id', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: interrupts\ndata: {"type":"interrupts","data":[{"id":"reused-interrupt-id","value":{"title":"请确认或者修改以下PPT的相关信息，确认无误后点击提交","type":"edit_form","payload":{"theme":"DeepSeek R1 介绍","target_audience":"导师和同学","num_pages":10,"user_role":"学生","layout_style":"top_bottom"}}}]}\n\n',
+        ),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: interrupts\ndata: {"type":"interrupts","data":[{"id":"reused-interrupt-id","value":{"title":"你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过","type":"upload_ppt_content_files","file_type":["pdf","docx","markdown","md"]}}]}\n\n',
+        ),
+      )
+
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
+      target: { value: '帮我做一个 DeepSeek 汇报' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+
+    await screen.findByText('请确认或者修改以下PPT的相关信息，确认无误后点击提交')
+    fireEvent.click(screen.getByRole('button', { name: '提交' }))
+
+    await screen.findByText('你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过')
+
+    const submitButtons = screen.getAllByRole('button', { name: '提交' })
+    const skipButtons = screen.getAllByRole('button', { name: '跳过' })
+    const urlField = screen.getByRole('textbox', { name: '内容来源网址' })
+    const uploadButton = screen.getByRole('button', { name: '选择内容文件' })
+
+    expect(submitButtons).toHaveLength(2)
+    expect(submitButtons[0]).toBeDisabled()
+    expect(submitButtons[1]).toBeDisabled()
+    expect(skipButtons[0]).toBeEnabled()
+    expect(urlField).toBeEnabled()
+    expect(uploadButton).toBeEnabled()
+  })
+
+  it('exports the currently previewed draft deck from the preview sidebar', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: first_draft\ndata: {"first_draft_results":[{"page_index":0,"svg_content":"<svg><text>draft-page-1</text></svg>","file_path":"user_data/thread-1/first_draft/page_1.svg"}]}\n\n',
+        ),
+      )
+
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
+      target: { value: '帮我做一个 DeepSeek 汇报' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+
+    await screen.findByRole('button', { name: '查看第 1 页' })
+    const exportButton = screen.getByRole('button', { name: '导出 PPT' })
+    expect(exportButton).toBeEnabled()
+
+    fireEvent.click(exportButton)
+
+    await waitFor(() => {
+      expect(pptWriteFileMock).toHaveBeenCalledWith({
+        fileName: 'ppt-agent-draft.pptx',
+      })
+    })
+  })
+})
+
+describe('ppt export', () => {
+  it('exports the current deck as a wide-screen ppt using slide svg content', async () => {
+    await exportSlidesAsPpt({
+      deckVersion: 'final',
+      slides: [
+        {
+          id: 'final-1',
+          title: 'Final 1',
+          thumbnailLabel: '查看第 1 页',
+          previewMode: 'final',
+          svgContent: '<svg><text>final-1</text></svg>',
+        },
+      ],
+    })
+
+    expect(pptInstances).toHaveLength(1)
+    expect(pptInstances[0]?.layout).toBe('LAYOUT_WIDE')
+    expect(pptInstances[0]?.slides).toHaveLength(1)
+    expect(pptAddImageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining('data:image/svg+xml'),
+        x: 0,
+        y: 0,
+      }),
+    )
+    expect(pptWriteFileMock).toHaveBeenCalledWith({
+      fileName: 'ppt-agent-final.pptx',
+    })
   })
 })
