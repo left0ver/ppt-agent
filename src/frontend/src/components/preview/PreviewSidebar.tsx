@@ -51,9 +51,6 @@ export default function PreviewSidebar({
     >
       <div className="preview-sidebar__header">
         <div>
-          <Typography.Text className="preview-sidebar__eyebrow">
-            Slide Deck
-          </Typography.Text>
           <Typography.Title level={4}>PPT 预览</Typography.Title>
         </div>
         <Tag color="gold" variant="filled">
@@ -101,7 +98,7 @@ export default function PreviewSidebar({
         {slides.length === 0 ? (
           <div className="preview-sidebar__empty">
             <Empty
-              description="当前版本暂无可预览页面"
+              description="当前暂无可预览的页面"
               image={Empty.PRESENTED_IMAGE_SIMPLE}
             />
           </div>

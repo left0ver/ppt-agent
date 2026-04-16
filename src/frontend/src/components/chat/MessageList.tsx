@@ -1,5 +1,5 @@
 import { Empty } from 'antd'
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { LayoutStyle, ChatMessage } from '../../types/ppt-agent'
 import MessageBubble from './MessageBubble'
 import InterruptCard, {
@@ -23,17 +23,62 @@ export default function MessageList({
   onInterruptSkip,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (!scrollRef.current || typeof scrollRef.current.scrollTo !== 'function') {
+  function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
+    const container = scrollRef.current
+
+    if (!container) {
       return
     }
 
-    scrollRef.current.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: 'smooth',
+    if (typeof container.scrollTo === 'function') {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior,
+      })
+      return
+    }
+
+    bottomRef.current?.scrollIntoView({
+      block: 'end',
+      behavior,
     })
-  }, [messages])
+  }
+
+  useLayoutEffect(() => {
+    if (messages.length === 0) {
+      return
+    }
+
+    const rafId = window.requestAnimationFrame(() => {
+      scrollToBottom('smooth')
+    })
+
+    return () => {
+      window.cancelAnimationFrame(rafId)
+    }
+  }, [messages, resolvedInterruptMessageIds])
+
+  useEffect(() => {
+    const container = scrollRef.current
+
+    if (!container || typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const observer = new ResizeObserver(() => {
+      scrollToBottom('auto')
+    })
+
+    Array.from(container.children).forEach((child) => {
+      observer.observe(child)
+    })
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [messages, resolvedInterruptMessageIds])
 
   if (messages.length === 0) {
     return (
@@ -74,6 +119,7 @@ export default function MessageList({
           <MessageBubble key={message.id} message={message} />
         ),
       )}
+      <div ref={bottomRef} aria-hidden="true" />
     </section>
   )
 }

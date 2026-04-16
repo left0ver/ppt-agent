@@ -232,6 +232,44 @@ function ChatComposerLockHarness() {
   )
 }
 
+function ChatAutoScrollHarness() {
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: 'message-status-1',
+      kind: 'assistant_status',
+      text: '第一条消息',
+    },
+  ])
+
+  return (
+    <div>
+      <ChatPanel
+        composerDisabled={false}
+        composerLoading={false}
+        messages={messages}
+        onComposerSubmit={() => {}}
+        onInterruptSkip={() => {}}
+        onInterruptSubmit={() => {}}
+      />
+      <button
+        type="button"
+        onClick={() =>
+          setMessages((currentMessages) => [
+            ...currentMessages,
+            {
+              id: `message-status-${currentMessages.length + 1}`,
+              kind: 'assistant_status',
+              text: `新增消息 ${currentMessages.length + 1}`,
+            },
+          ])
+        }
+      >
+        添加消息
+      </button>
+    </div>
+  )
+}
+
 function InterruptHarness({
   messages,
   onSubmit,
@@ -406,6 +444,33 @@ describe('App preview integration', () => {
     expect(within(screen.getByLabelText('用户')).getByText('做一份 AI 行业分析')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: '输入 PPT 需求' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+  })
+
+  it('auto-scrolls the timeline when a new message arrives', async () => {
+    const scrollToMock = vi
+      .spyOn(HTMLElement.prototype, 'scrollTo')
+      .mockImplementation(() => {})
+    const originalResizeObserver = globalThis.ResizeObserver
+
+    try {
+      globalThis.ResizeObserver = class ResizeObserver {
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      }
+
+      render(<ChatAutoScrollHarness />)
+      scrollToMock.mockClear()
+
+      fireEvent.click(screen.getByRole('button', { name: '添加消息' }))
+
+      await waitFor(() => {
+        expect(scrollToMock).toHaveBeenCalled()
+      })
+    } finally {
+      scrollToMock.mockRestore()
+      globalThis.ResizeObserver = originalResizeObserver
+    }
   })
 
   it('uses unified identities for assistant and user chat bubbles', () => {

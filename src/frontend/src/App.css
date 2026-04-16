@@ -188,7 +188,8 @@
 .chat-panel > .ant-card-body {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: calc(100vh - 92px);
+  height: calc(100vh - 92px);
+  max-height: calc(100vh - 92px);
 }
 
 .chat-panel__header {
@@ -230,6 +231,7 @@
   align-items: start;
   gap: 14px;
   grid-auto-rows: max-content;
+  min-height: 0;
   padding: 20px 2px;
   overflow: auto;
 }
@@ -457,7 +459,8 @@
   }
 
   .chat-panel .ant-card-body {
-    min-height: auto;
+    height: auto;
+    max-height: none;
   }
 
   .chat-panel__header,
