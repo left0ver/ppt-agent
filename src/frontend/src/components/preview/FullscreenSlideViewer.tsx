@@ -44,6 +44,8 @@ export default function FullscreenSlideViewer({
     ? Math.min(Math.max(slideIndex, 0), slideCount - 1)
     : -1
   const displayIndex = hasSlides ? safeSlideIndex + 1 : 0
+  const canGoPrevious = hasSlides && safeSlideIndex > 0
+  const canGoNext = hasSlides && safeSlideIndex < slideCount - 1
 
   return createPortal(
     <div
@@ -58,19 +60,12 @@ export default function FullscreenSlideViewer({
           {`第 ${displayIndex} / ${slideCount} 页`}
         </Typography.Text>
         <div className="fullscreen-viewer__actions">
-          <Button
-            disabled={!hasSlides || safeSlideIndex <= 0}
-            onClick={onPrevious}
-          >
-            上一页
-          </Button>
-          <Button
-            disabled={!hasSlides || safeSlideIndex >= slideCount - 1}
-            onClick={onNext}
-            type="primary"
-          >
-            下一页
-          </Button>
+          {canGoPrevious ? <Button onClick={onPrevious}>上一页</Button> : null}
+          {canGoNext ? (
+            <Button onClick={onNext} type="primary">
+              下一页
+            </Button>
+          ) : null}
         </div>
       </div>
 

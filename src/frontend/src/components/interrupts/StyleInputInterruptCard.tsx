@@ -1,5 +1,5 @@
 import { Button, Card, Form, Input, Space } from 'antd'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { InterruptEnvelope, InterruptValue } from '../../types/ppt-agent'
 import type { InterruptActionContext, InterruptSubmitHandler } from './InterruptCard'
 
@@ -21,6 +21,12 @@ export default function StyleInputInterruptCard({
   const [styleValue, setStyleValue] = useState('')
   const [isPending, setIsPending] = useState(false)
   const normalizedValue = useMemo(() => styleValue.trim(), [styleValue])
+
+  useEffect(() => {
+    if (disabled) {
+      setIsPending(false)
+    }
+  }, [disabled])
 
   function handleSubmit() {
     if (disabled || isPending) {
@@ -59,7 +65,7 @@ export default function StyleInputInterruptCard({
           <Button
             aria-label="提交"
             disabled={disabled}
-            loading={isPending}
+            loading={!disabled && isPending}
             type="primary"
             onClick={handleSubmit}
           >

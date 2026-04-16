@@ -50,7 +50,7 @@ export default function ChatPanel({
       <header className="chat-panel__header">
         <div className="chat-panel__meta">
           <Badge color={threadStatus === 'error' ? '#e84545' : '#c8924b'} />
-          <Tag variant="filled">{threadStatusText[threadStatus]}</Tag>
+          <Tag variant="filled">{threadId ? '会话ID' : threadStatusText[threadStatus]}</Tag>
           {threadId ? (
             <Typography.Text code ellipsis>
               {threadId}

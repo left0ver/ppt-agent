@@ -135,9 +135,6 @@ export default function PreviewSidebar({
                 </div>
                 <div className="preview-thumb__meta">
                   <Typography.Text strong>{slide.title}</Typography.Text>
-                  <Typography.Text type="secondary">
-                    {slide.previewMode === 'draft' ? '初稿' : '终稿'} · 点击进入全屏
-                  </Typography.Text>
                 </div>
               </Button>
             )

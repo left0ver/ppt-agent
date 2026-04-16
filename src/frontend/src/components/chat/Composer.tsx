@@ -1,4 +1,4 @@
-import { Button, Input, Space, Typography } from 'antd'
+import { Button, Input } from 'antd'
 import { useState } from 'react'
 
 export type ComposerProps = {
@@ -30,32 +30,38 @@ export default function Composer({ disabled, loading, onSubmit }: ComposerProps)
         void handleSubmit()
       }}
     >
-      <div className="chat-composer__heading">
-        <Typography.Title level={5}>输入你的 PPT 需求</Typography.Title>
-
-      </div>
-
-      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+      <div className="chat-composer__surface">
         <Input.TextArea
           aria-label="输入 PPT 需求"
           disabled={disabled}
-          placeholder="例如：帮我做一份面向导师的 DeepSeek 论文汇报，12 页，上下结构，风格偏简洁正式。"
-          rows={5}
+          className="chat-composer__input"
+          placeholder="我是学生，我需要向导师介绍deepseekR1的论文，PPT页数大概为10页，布局风格采用网格布局方式"
+          rows={3}
+          variant="borderless"
           value={value}
           onChange={(event) => setValue(event.target.value)}
+          onPressEnter={(event) => {
+            if (!event.shiftKey) {
+              event.preventDefault()
+              void handleSubmit()
+            }
+          }}
         />
-        <Button
-          block
-          className="chat-composer__submit"
-          disabled={disabled || loading}
-          htmlType="submit"
-          loading={loading}
-          size="large"
-          type="primary"
-        >
-          {loading ? '发送中...' : '发送需求'}
-        </Button>
-      </Space>
+
+        <div className="chat-composer__footer">
+          <Button
+            aria-label="发送"
+            className="chat-composer__submit"
+            disabled={disabled || loading}
+            htmlType="submit"
+            loading={loading}
+            size="large"
+            type="primary"
+          >
+            {loading ? '发送中...' : '发送'}
+          </Button>
+        </div>
+      </div>
     </form>
   )
 }

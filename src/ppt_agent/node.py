@@ -127,18 +127,14 @@ def search_ppt_contents(state: State, runtime: Runtime, config: RunnableConfig):
     thread_id = config["configurable"].get("thread_id")
     ppt_info: PPTInfo = state.ppt_info
 
-    chain = grok_search_prompt_template | search_model
+    chain = grok_search_prompt_template | search_model | JsonOutputParser()
     # 使用grok的搜索能力来搜索ppt的内容
-    search_response = chain.with_retry().invoke(
+    grok_search_results = chain.with_retry().invoke(
         {
             "theme": ppt_info.theme,
             "target_audience": ppt_info.target_audience,
             "user_role": ppt_info.user_role,
         },
-    )
-    json_parser = JsonOutputParser()
-    grok_search_results = json_parser.parse(
-        json_repair.repair_json(search_response.content)
     )
     urls = [
         result.get("url")

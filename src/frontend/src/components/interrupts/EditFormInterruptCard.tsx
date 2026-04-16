@@ -1,5 +1,5 @@
 import { Button, Card, Form, Input, InputNumber, Select, Space } from 'antd'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   EditFormInterruptValue,
   InterruptEnvelope,
@@ -35,6 +35,12 @@ export default function EditFormInterruptCard({
     layout_style: interrupt.value.payload.layout_style ?? 'top_bottom',
   })
   const [isPending, setIsPending] = useState(false)
+
+  useEffect(() => {
+    if (disabled) {
+      setIsPending(false)
+    }
+  }, [disabled])
 
   const numPagesIsValid =
     Number.isInteger(formValue.num_pages) &&
@@ -128,7 +134,7 @@ export default function EditFormInterruptCard({
           <Button
             aria-label="提交"
             disabled={disabled || isPending || !numPagesIsValid}
-            loading={isPending}
+            loading={!disabled && isPending}
             type="primary"
             onClick={handleSubmit}
           >

@@ -44,12 +44,12 @@ function InterruptShell({
   return (
     <Bubble
       avatar={<div className="chat-bubble-avatar">AI</div>}
-      className="chat-bubble chat-bubble--start"
+      className="chat-bubble chat-bubble--start interrupt-bubble"
       content={children}
-      header={<span className="chat-bubble-label">助手补充请求</span>}
+      header={<span className="chat-bubble-label">PPT生成助手</span>}
       placement="start"
       shape="round"
-      variant="shadow"
+      variant="borderless"
     />
   )
 }

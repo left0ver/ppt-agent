@@ -1,3 +1,4 @@
+import { message } from 'antd'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type {
   FirstDraftEventPayload,
@@ -493,10 +494,13 @@ export function usePptAgentSession() {
     setExportLoading(true)
 
     try {
-      await exportSlidesAsPpt({
+      const fileName = await exportSlidesAsPpt({
         deckVersion: activeDeckVersion,
         slides,
       })
+      void message.success(`已开始导出 ${fileName}`)
+    } catch (error) {
+      void message.error(normalizeApiError(error).message)
     } finally {
       setExportLoading(false)
     }

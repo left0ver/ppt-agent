@@ -1,6 +1,6 @@
 import { Button, Card, Form, Input, Space, Typography, Upload } from 'antd'
 import type { UploadFile } from 'antd'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { InterruptEnvelope, InterruptValue } from '../../types/ppt-agent'
 import type {
   InterruptActionContext,
@@ -37,6 +37,12 @@ export default function ContentUploadInterruptCard({
   const [urlValue, setUrlValue] = useState('')
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [isPending, setIsPending] = useState(false)
+
+  useEffect(() => {
+    if (disabled) {
+      setIsPending(false)
+    }
+  }, [disabled])
 
   const normalizedUrls = useMemo(
     () =>
@@ -131,7 +137,7 @@ export default function ContentUploadInterruptCard({
           <Button
             aria-label="提交"
             disabled={disabled || !canSubmit || isPending}
-            loading={isPending}
+            loading={!disabled && isPending}
             type="primary"
             onClick={handleSubmit}
           >

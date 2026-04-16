@@ -185,7 +185,7 @@
   margin-bottom: 0;
 }
 
-.chat-panel .ant-card-body {
+.chat-panel > .ant-card-body {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: calc(100vh - 92px);
@@ -226,13 +226,17 @@
 
 .chat-message-list {
   display: grid;
+  align-content: start;
+  align-items: start;
   gap: 14px;
+  grid-auto-rows: max-content;
   padding: 20px 2px;
   overflow: auto;
 }
 
 .chat-bubble-row {
   display: flex;
+  align-items: flex-start;
 }
 
 .chat-bubble-row--start {
@@ -256,6 +260,10 @@
 
 .chat-bubble .ant-bubble-header {
   margin-bottom: 8px;
+}
+
+.interrupt-bubble .ant-bubble-content-borderless {
+  display: block;
 }
 
 .chat-bubble-avatar {
@@ -284,35 +292,55 @@
 .chat-composer {
   margin-top: 12px;
   padding-top: 16px;
-  border-top: 1px solid rgba(109, 84, 60, 0.1);
 }
 
-.chat-composer__heading {
-  margin-bottom: 14px;
+.chat-composer__surface {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border: 1px solid rgba(109, 84, 60, 0.14);
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255, 252, 248, 0.98), rgba(250, 245, 238, 0.94));
+  box-shadow: 0 14px 28px rgba(181, 146, 103, 0.14);
 }
 
-.chat-composer__heading .ant-typography {
-  margin-bottom: 0;
+.chat-composer__input.ant-input,
+.chat-composer__input.ant-input-textarea textarea.ant-input {
+  padding: 2px 4px;
+  color: var(--app-text);
+  font-size: 16px;
+  line-height: 1.55;
+  background: transparent;
+  box-shadow: none;
 }
 
-.chat-composer__heading h5.ant-typography {
-  margin-bottom: 6px;
+.chat-composer__input.ant-input-textarea textarea.ant-input::placeholder {
+  color: rgba(126, 98, 72, 0.42);
 }
 
-.chat-composer textarea {
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.82);
+.chat-composer__input.ant-input-textarea textarea.ant-input:focus,
+.chat-composer__input.ant-input-textarea textarea.ant-input:focus-within {
+  box-shadow: none;
+}
+
+.chat-composer__footer {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .chat-composer__submit {
+  min-width: 96px;
   height: 46px;
+  padding-inline: 22px;
   border-radius: 999px;
 }
 
 .interrupt-card {
+  height: auto;
   min-width: min(680px, 100%);
   border-radius: 24px !important;
   background: linear-gradient(180deg, rgba(255, 252, 248, 0.96), rgba(248, 239, 228, 0.92));
+  box-shadow: var(--app-shadow);
 }
 
 .interrupt-card .ant-card-head {

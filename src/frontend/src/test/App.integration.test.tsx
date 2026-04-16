@@ -18,7 +18,7 @@ import PreviewSidebar, {
 import { exportSlidesAsPpt } from '../lib/ppt-export'
 import type { ChatMessage } from '../types/ppt-agent'
 
-const pptWriteFileMock = vi.fn<() => Promise<void>>()
+const pptWriteFileMock = vi.fn<(_: { fileName: string }) => Promise<void>>()
 const pptAddImageMock = vi.fn()
 const pptInstances: Array<{
   layout: string
@@ -236,19 +236,61 @@ function InterruptHarness({
   messages,
   onSubmit,
   onSkip,
+  resolvedInterruptMessageIds,
 }: {
   messages: ChatMessage[]
   onSubmit: (context: Record<string, unknown>, payload: Record<string, unknown>) => Promise<void> | void
   onSkip: (context: Record<string, unknown>) => Promise<void> | void
+  resolvedInterruptMessageIds?: string[]
 }) {
   return (
     <ChatPanel
       composerDisabled
       composerLoading={false}
       messages={messages}
+      resolvedInterruptMessageIds={resolvedInterruptMessageIds}
       onComposerSubmit={() => {}}
       onInterruptSkip={onSkip}
       onInterruptSubmit={onSubmit}
+    />
+  )
+}
+
+function ResolvedEditInterruptHarness({
+  onSubmit,
+}: {
+  onSubmit: (context: Record<string, unknown>, payload: Record<string, unknown>) => Promise<void> | void
+}) {
+  const [resolvedInterruptMessageIds, setResolvedInterruptMessageIds] = useState<string[]>([])
+
+  return (
+    <InterruptHarness
+      messages={[
+        {
+          id: 'message-edit-resolved-1',
+          kind: 'assistant_interrupt',
+          interrupt: {
+            id: 'interrupt-edit-resolved-1',
+            value: {
+              type: 'edit_form',
+              title: '补充演示文稿信息',
+              payload: {
+                theme: 'AI 营销方案',
+                target_audience: '市场团队',
+                num_pages: 12,
+                user_role: '产品经理',
+                layout_style: 'grid',
+              },
+            },
+          },
+        },
+      ]}
+      resolvedInterruptMessageIds={resolvedInterruptMessageIds}
+      onSkip={() => {}}
+      onSubmit={(context, payload) => {
+        setResolvedInterruptMessageIds(['message-edit-resolved-1'])
+        return onSubmit(context, payload)
+      }}
     />
   )
 }
@@ -261,6 +303,42 @@ afterEach(() => {
 })
 
 describe('App preview integration', () => {
+  it('exports the currently previewed draft deck from the preview sidebar', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    pptWriteFileMock.mockResolvedValue()
+
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: first_draft\ndata: {"first_draft_results":[{"page_index":0,"svg_content":"<svg><text>draft-page-1</text></svg>","file_path":"user_data/thread-1/first_draft/page_1.svg"}]}\n\n',
+        ),
+      )
+
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
+      target: { value: '帮我做一个 DeepSeek 汇报' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    await screen.findByRole('button', { name: '查看第 1 页' })
+    fireEvent.click(screen.getByRole('button', { name: '导出 PPT' }))
+
+    await waitFor(() => {
+      expect(pptWriteFileMock).toHaveBeenCalledWith({
+        fileName: 'ppt-agent-draft.pptx',
+      })
+    })
+  })
+
   it('lets a thumbnail click drive the fullscreen preview flow', async () => {
     render(<PreviewIntegrationHarness />)
 
@@ -274,10 +352,14 @@ describe('App preview integration', () => {
     const viewer = screen.getByRole('dialog', { name: '全屏查看幻灯片' })
     expect(within(viewer).getByText('第 2 / 2 页')).toBeInTheDocument()
     expect(within(viewer).getByText('final-2')).toBeInTheDocument()
+    expect(within(viewer).queryByRole('button', { name: '下一页' })).not.toBeInTheDocument()
+    expect(within(viewer).getByRole('button', { name: '上一页' })).toBeInTheDocument()
 
     fireEvent.click(within(viewer).getByRole('button', { name: '上一页' }))
     expect(within(viewer).getByText('第 1 / 2 页')).toBeInTheDocument()
     expect(within(viewer).getByText('final-1')).toBeInTheDocument()
+    expect(within(viewer).queryByRole('button', { name: '上一页' })).not.toBeInTheDocument()
+    expect(within(viewer).getByRole('button', { name: '下一页' })).toBeInTheDocument()
 
     fireEvent.click(within(viewer).getByRole('button', { name: '关闭预览' }))
     expect(
@@ -319,11 +401,47 @@ describe('App preview integration', () => {
 
     const promptInput = screen.getByRole('textbox', { name: '输入 PPT 需求' })
     fireEvent.change(promptInput, { target: { value: '  做一份 AI 行业分析  ' } })
-    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     expect(within(screen.getByLabelText('用户')).getByText('做一份 AI 行业分析')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: '输入 PPT 需求' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '发送需求' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+  })
+
+  it('uses unified identities for assistant and user chat bubbles', () => {
+    render(
+      <InterruptHarness
+        messages={[
+          {
+            id: 'message-status-1',
+            kind: 'assistant_status',
+            text: '正在确认需求',
+          },
+          {
+            id: 'message-user-1',
+            kind: 'user_interrupt_reply',
+            text: '我补充了模板要求',
+          },
+          {
+            id: 'message-interrupt-1',
+            kind: 'assistant_interrupt',
+            interrupt: {
+              id: 'interrupt-envelope-edit-identity-1',
+              value: {
+                type: 'text_input',
+                title: '补充终稿风格',
+              },
+            },
+          },
+        ]}
+        onSkip={() => {}}
+        onSubmit={() => {}}
+      />,
+    )
+
+    expect(screen.getAllByText('PPT生成助手')).toHaveLength(2)
+    expect(screen.getByText('用户')).toBeInTheDocument()
+    expect(screen.getByText('你')).toBeInTheDocument()
   })
 
   it('passes interrupt identity and edited payload on edit_form submit', async () => {
@@ -430,6 +548,30 @@ describe('App preview integration', () => {
     })
   })
 
+  it('stops showing loading once a submitted interrupt card becomes resolved', async () => {
+    let resolveSubmit: (() => void) | undefined
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSubmit = resolve
+        }),
+    )
+
+    render(<ResolvedEditInterruptHarness onSubmit={onSubmit} />)
+
+    const submitButton = screen.getByRole('button', { name: '提交' })
+    fireEvent.click(submitButton)
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+    })
+
+    expect(submitButton).toBeDisabled()
+    expect(submitButton).not.toHaveClass('ant-btn-loading')
+
+    resolveSubmit?.()
+  })
+
   it('creates a new thread on mount and renders the chat shell', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     fetchMock
@@ -482,7 +624,7 @@ describe('App preview integration', () => {
     fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
       target: { value: '帮我做一个 DeepSeek 汇报' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await screen.findByText('请确认或者修改以下PPT的相关信息，确认无误后点击提交')
     fireEvent.click(screen.getByRole('button', { name: '提交' }))
@@ -533,7 +675,7 @@ describe('App preview integration', () => {
     fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
       target: { value: '帮我做一个 DeepSeek 汇报' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await screen.findByText('你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过')
     fireEvent.click(screen.getByRole('button', { name: '跳过' }))
@@ -575,7 +717,7 @@ describe('App preview integration', () => {
     fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
       target: { value: '帮我做一个 DeepSeek 汇报' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await screen.findByText('你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过')
     fireEvent.click(screen.getByRole('button', { name: '跳过' }))
@@ -615,7 +757,7 @@ describe('App preview integration', () => {
     fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
       target: { value: '帮我做一个 DeepSeek 汇报' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await screen.findByText('请确认或者修改以下PPT的相关信息，确认无误后点击提交')
     fireEvent.click(screen.getByRole('button', { name: '提交' }))
@@ -635,46 +777,12 @@ describe('App preview integration', () => {
     expect(uploadButton).toBeEnabled()
   })
 
-  it('exports the currently previewed draft deck from the preview sidebar', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-    fetchMock
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
-          status: 200,
-        }),
-      )
-      .mockResolvedValueOnce(
-        createSseResponse(
-          'event: first_draft\ndata: {"first_draft_results":[{"page_index":0,"svg_content":"<svg><text>draft-page-1</text></svg>","file_path":"user_data/thread-1/first_draft/page_1.svg"}]}\n\n',
-        ),
-      )
-
-    render(<App />)
-
-    fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
-      target: { value: '帮我做一个 DeepSeek 汇报' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
-
-    await screen.findByRole('button', { name: '查看第 1 页' })
-    const exportButton = screen.getByRole('button', { name: '导出 PPT' })
-    expect(exportButton).toBeEnabled()
-
-    fireEvent.click(exportButton)
-
-    await waitFor(() => {
-      expect(pptWriteFileMock).toHaveBeenCalledWith({
-        fileName: 'ppt-agent-draft.pptx',
-      })
-    })
-  })
 })
 
 describe('ppt export', () => {
   it('exports the current deck as a wide-screen ppt using slide svg content', async () => {
+    pptWriteFileMock.mockResolvedValue()
+
     await exportSlidesAsPpt({
       deckVersion: 'final',
       slides: [
@@ -693,7 +801,7 @@ describe('ppt export', () => {
     expect(pptInstances[0]?.slides).toHaveLength(1)
     expect(pptAddImageMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.stringContaining('data:image/svg+xml'),
+        data: expect.stringContaining('image/svg+xml;base64,'),
         x: 0,
         y: 0,
       }),
