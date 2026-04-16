@@ -1,0 +1,46 @@
+:root {
+  --app-bg: #efe4d2;
+  --app-bg-alt: #f8f1e7;
+  --app-panel: rgba(255, 252, 247, 0.82);
+  --app-panel-strong: rgba(255, 250, 244, 0.94);
+  --app-border: rgba(95, 66, 42, 0.12);
+  --app-text: #34271f;
+  --app-text-soft: #7d6756;
+  --app-shadow: 0 24px 60px rgba(89, 58, 33, 0.12);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--app-text);
+  font-family: "Source Han Serif SC", "Noto Serif SC", "Songti SC", serif;
+  background:
+    radial-gradient(circle at top left, rgba(255, 248, 235, 0.9), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(210, 169, 122, 0.18), transparent 32%),
+    linear-gradient(180deg, var(--app-bg-alt) 0%, var(--app-bg) 100%);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}

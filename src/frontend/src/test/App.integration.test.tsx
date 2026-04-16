@@ -264,7 +264,9 @@ describe('App preview integration', () => {
   it('lets a thumbnail click drive the fullscreen preview flow', async () => {
     render(<PreviewIntegrationHarness />)
 
-    expect(screen.getByText('点击左侧缩略图查看页面预览')).toBeInTheDocument()
+    expect(
+      screen.queryByText('点击左侧缩略图查看页面预览'),
+    ).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '终稿' }))
     fireEvent.click(screen.getByRole('button', { name: '查看第 2 页' }))
@@ -281,7 +283,9 @@ describe('App preview integration', () => {
     expect(
       screen.queryByRole('dialog', { name: '全屏查看幻灯片' }),
     ).not.toBeInTheDocument()
-    expect(screen.getByText('点击左侧缩略图查看页面预览')).toBeInTheDocument()
+    expect(
+      screen.queryByText('点击左侧缩略图查看页面预览'),
+    ).not.toBeInTheDocument()
   })
 
   it('keeps the selected slide stable when the slide list changes after selection', () => {
@@ -440,7 +444,8 @@ describe('App preview integration', () => {
 
     render(<App />)
 
-    expect(await screen.findByText('对话工作区')).toBeInTheDocument()
+    expect(await screen.findByLabelText('PPT 助手聊天面板')).toBeInTheDocument()
+    expect(screen.queryByText('对话工作区')).not.toBeInTheDocument()
     expect(screen.queryByText('One active run per fresh session')).not.toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/create_session_id'),
