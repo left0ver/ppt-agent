@@ -1,6 +1,10 @@
 import type {
   ChatMessageDraft,
+  DraftGeneratedEvent,
+  ErrorReceivedEvent,
+  FinalGeneratedEvent,
   InterruptReceivedEvent,
+  InterruptResponseRecordedEvent,
   SessionEvent,
   SessionState,
   StartSubmittedEvent,
@@ -87,7 +91,14 @@ function getMessageState(state: SessionState): MessageState {
 
 function isCorrelatedEventForActiveThread(
   state: SessionState,
-  event: StartSubmittedEvent | StatusReceivedEvent | InterruptReceivedEvent,
+  event:
+    | StartSubmittedEvent
+    | StatusReceivedEvent
+    | InterruptReceivedEvent
+    | InterruptResponseRecordedEvent
+    | DraftGeneratedEvent
+    | FinalGeneratedEvent
+    | ErrorReceivedEvent,
 ): boolean {
   return state.threadId !== null && event.threadId === state.threadId
 }
@@ -156,6 +167,87 @@ export function sessionReducer(
       })
 
       return createWaitingInterruptState(state, messageState, event.interrupt)
+    }
+
+    case 'interrupt_response_recorded': {
+      if (!isCorrelatedEventForActiveThread(state, event)) {
+        return state
+      }
+
+      const messageState = appendMessage(state, {
+        kind: 'user_interrupt_reply',
+        text: event.text,
+      })
+
+      return createRunningState(state, messageState)
+    }
+
+    case 'draft_generated': {
+      if (!isCorrelatedEventForActiveThread(state, event)) {
+        return state
+      }
+
+      return {
+        ...state,
+        ...appendMessage(state, {
+          kind: 'assistant_result_draft',
+          text: event.text,
+        }),
+      }
+    }
+
+    case 'final_generated': {
+      if (!isCorrelatedEventForActiveThread(state, event)) {
+        return state
+      }
+
+      if (state.threadId === null) {
+        return state
+      }
+
+      return {
+        ...appendMessage(state, {
+          kind: 'assistant_result_final',
+          text: event.text,
+        }),
+        threadId: state.threadId,
+        composerLocked: false,
+        threadStatus: 'completed',
+        activeInterrupt: null,
+      }
+    }
+
+    case 'error_received': {
+      if (!isCorrelatedEventForActiveThread(state, event)) {
+        return state
+      }
+
+      const messageState = appendMessage(state, {
+        kind: 'assistant_error',
+        text: event.text,
+      })
+
+      if (state.threadStatus === 'waiting_interrupt' && state.threadId !== null) {
+        return {
+          ...messageState,
+          threadId: state.threadId,
+          composerLocked: true,
+          threadStatus: 'waiting_interrupt',
+          activeInterrupt: state.activeInterrupt,
+        }
+      }
+
+      if (state.threadId === null) {
+        return state
+      }
+
+      return {
+        ...messageState,
+        threadId: state.threadId,
+        composerLocked: false,
+        threadStatus: 'error',
+        activeInterrupt: null,
+      }
     }
   }
 }

@@ -1,26 +1,19 @@
+import { Card, Typography } from 'antd'
+
 export default function PreviewEmptyState() {
   return (
-    <div
+    <Card
       aria-label="预览空状态"
-      style={{
-        minHeight: '220px',
-        border: '1px dashed #d1d5db',
-        borderRadius: '16px',
-        display: 'grid',
-        placeItems: 'center',
-        padding: '24px',
-        textAlign: 'center',
-        color: '#4b5563',
-      }}
+      className="preview-empty"
+      variant="borderless"
     >
-      <div>
-        <p style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#111827' }}>
-          点击左侧缩略图查看页面预览
-        </p>
-        <p style={{ margin: '8px 0 0', fontSize: '14px' }}>
-          选择任意一页后，可继续进入全屏查看。
-        </p>
-      </div>
-    </div>
+      <Typography.Text className="preview-empty__eyebrow">
+        Fullscreen Viewer
+      </Typography.Text>
+      <Typography.Title level={4}>点击左侧缩略图查看页面预览</Typography.Title>
+      <Typography.Paragraph>
+        预览会以全屏方式打开，支持左右翻页查看初稿或终稿。
+      </Typography.Paragraph>
+    </Card>
   )
 }

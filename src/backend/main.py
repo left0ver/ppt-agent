@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
@@ -15,8 +16,15 @@ from src.ppt_agent.bridge import resume_ppt_agent, start_ppt_agent
 from src.ppt_agent.config import get_config
 from src.ppt_agent.ppt_agent import PPTAgent
 from src.ppt_agent.types import LayoutType
-from src.ppt_agent.utils import generate_thread_id, is_development, save_file
+from src.ppt_agent.utils import (
+    generate_thread_id,
+    is_development,
+    save_file,
+    setup_logging,
+)
 
+setup_logging()
+logger = logging.getLogger(__file__)
 
 async def connection_factory():
     config = get_config()

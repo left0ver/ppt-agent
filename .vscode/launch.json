@@ -35,7 +35,7 @@
       "name": "debug bridge",
       "type": "debugpy",
       "request": "launch",
-      "module": "agent.bridge",
+      "module": "src.ppt_agent.bridge",
       "justMyCode": true,
       "console": "integratedTerminal"
     },

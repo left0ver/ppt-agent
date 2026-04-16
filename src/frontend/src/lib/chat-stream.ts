@@ -28,7 +28,54 @@ function extractCompleteSseFrames(buffer: string): {
   }
 }
 
+function extractCompleteJsonLines(buffer: string): {
+  frames: string[]
+  remainder: string
+} {
+  const lines = buffer.split(SSE_LINE_SEPARATOR)
+
+  if (lines.length <= 1) {
+    return {
+      frames: [],
+      remainder: buffer,
+    }
+  }
+
+  const remainder = lines.pop() ?? ''
+
+  return {
+    frames: lines.map((line) => line.trim()).filter(Boolean),
+    remainder,
+  }
+}
+
+function isJsonLineTransport(buffer: string): boolean {
+  const trimmedBuffer = buffer.trimStart()
+
+  return trimmedBuffer.startsWith('{')
+}
+
 export function parseSseChunk(chunk: string): ParsedSseEvent[] {
+  const trimmedChunk = chunk.trim()
+
+  if (!trimmedChunk) {
+    return []
+  }
+
+  if (trimmedChunk.startsWith('{')) {
+    const parsed = JSON.parse(trimmedChunk) as {
+      data?: unknown
+      event?: unknown
+    }
+
+    return [
+      {
+        event: typeof parsed.event === 'string' ? parsed.event : 'message',
+        data: parsed.data,
+      },
+    ]
+  }
+
   return chunk
     .split(SSE_FRAME_SEPARATOR)
     .filter((block) => block.trim())
@@ -115,7 +162,9 @@ export async function streamChat({
 
     buffer += decoder.decode(value, { stream: true })
 
-    const { frames, remainder } = extractCompleteSseFrames(buffer)
+    const { frames, remainder } = isJsonLineTransport(buffer)
+      ? extractCompleteJsonLines(buffer)
+      : extractCompleteSseFrames(buffer)
     buffer = remainder
 
     for (const chunk of frames) {

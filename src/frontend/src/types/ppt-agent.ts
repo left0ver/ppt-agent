@@ -26,9 +26,9 @@ export type InterruptValue =
   | { title: string; type: 'upload_ppt_template'; file_type: string[] }
   | { title: string; type: 'text_input' }
 
-export interface InterruptEnvelope {
+export interface InterruptEnvelope<TValue extends InterruptValue = InterruptValue> {
   id: string
-  value: InterruptValue
+  value: TValue
 }
 
 export interface ThreadReadyEvent {
@@ -54,11 +54,39 @@ export interface InterruptReceivedEvent {
   interrupt: InterruptEnvelope
 }
 
+export interface InterruptResponseRecordedEvent {
+  type: 'interrupt_response_recorded'
+  threadId: string
+  text: string
+}
+
+export interface DraftGeneratedEvent {
+  type: 'draft_generated'
+  threadId: string
+  text: string
+}
+
+export interface FinalGeneratedEvent {
+  type: 'final_generated'
+  threadId: string
+  text: string
+}
+
+export interface ErrorReceivedEvent {
+  type: 'error_received'
+  threadId: string
+  text: string
+}
+
 export type SessionEvent =
   | ThreadReadyEvent
   | StartSubmittedEvent
   | StatusReceivedEvent
   | InterruptReceivedEvent
+  | InterruptResponseRecordedEvent
+  | DraftGeneratedEvent
+  | FinalGeneratedEvent
+  | ErrorReceivedEvent
 
 export type ChatMessage =
   | { id: string; kind: 'user_prompt'; text: string }
@@ -74,6 +102,20 @@ export type ChatMessageDraft = ChatMessage extends infer Message
     ? Omit<Message, 'id'>
     : never
   : never
+
+export type GeneratedSlideResult = {
+  file_path: string
+  page_index: number
+  svg_content: string
+}
+
+export type FirstDraftEventPayload = {
+  first_draft_results: GeneratedSlideResult[]
+}
+
+export type FinalPptEventPayload = {
+  final_ppt_results: GeneratedSlideResult[]
+}
 
 interface SessionStateBase {
   messages: ChatMessage[]

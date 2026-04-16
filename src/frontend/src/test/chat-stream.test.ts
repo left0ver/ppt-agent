@@ -92,6 +92,47 @@ describe('parseSseChunk', () => {
       },
     ])
   })
+
+  it('parses newline-delimited JSON events from the current backend transport', () => {
+    const chunk =
+      '{"data":{"type":"current_stage","data":"正在确认PPT的具体需求"},"raw_data":null,"event":"current_stage","id":null,"retry":null,"comment":null}\n' +
+      '{"data":{"type":"interrupts","data":[{"value":{"title":"请确认或者修改以下PPT的相关信息，确认无误后点击提交","type":"edit_form","payload":{"theme":"DeepSeek","target_audience":"导师和同学","num_pages":10,"user_role":"学生","layout_style":"top_bottom"}},"id":"interrupt-1"}]},"raw_data":null,"event":"interrupts","id":null,"retry":null,"comment":null}'
+
+    expect(parseSseChunk(chunk.split('\n')[0]!)).toEqual([
+      {
+        event: 'current_stage',
+        data: {
+          type: 'current_stage',
+          data: '正在确认PPT的具体需求',
+        },
+      },
+    ])
+
+    expect(parseSseChunk(chunk.split('\n')[1]!)).toEqual([
+      {
+        event: 'interrupts',
+        data: {
+          type: 'interrupts',
+          data: [
+            {
+              value: {
+                title: '请确认或者修改以下PPT的相关信息，确认无误后点击提交',
+                type: 'edit_form',
+                payload: {
+                  theme: 'DeepSeek',
+                  target_audience: '导师和同学',
+                  num_pages: 10,
+                  user_role: '学生',
+                  layout_style: 'top_bottom',
+                },
+              },
+              id: 'interrupt-1',
+            },
+          ],
+        },
+      },
+    ])
+  })
 })
 
 describe('streamChat', () => {
@@ -226,6 +267,63 @@ describe('streamChat', () => {
       data: {
         type: 'reply',
         data: 'done',
+      },
+    })
+  })
+
+  it('forwards newline-delimited JSON events from the current backend implementation', async () => {
+    const onEvent = vi.fn()
+    const payload = [
+      '{"data":{"type":"current_stage","data":"正在确认PPT的具体需求"},"raw_data":null,"event":"current_stage","id":null,"retry":null,"comment":null}\n',
+      '{"data":{"type":"interrupts","data":[{"value":{"title":"请确认或者修改以下PPT的相关信息，确认无误后点击提交","type":"edit_form","payload":{"theme":"DeepSeek","target_audience":"导师和同学","num_pages":10,"user_role":"学生","layout_style":"top_bottom"}},"id":"interrupt-1"}]},"raw_data":null,"event":"interrupts","id":null,"retry":null,"comment":null}\n',
+    ].join('')
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(payload))
+          controller.close()
+        },
+      }),
+      text: vi.fn().mockResolvedValue(''),
+    } as unknown as Response)
+
+    await streamChat({
+      thread_id: 'thread-1',
+      type: 'start',
+      user_input: 'hello',
+      onEvent,
+    })
+
+    expect(onEvent).toHaveBeenCalledTimes(2)
+    expect(onEvent).toHaveBeenNthCalledWith(1, {
+      event: 'current_stage',
+      data: {
+        type: 'current_stage',
+        data: '正在确认PPT的具体需求',
+      },
+    })
+    expect(onEvent).toHaveBeenNthCalledWith(2, {
+      event: 'interrupts',
+      data: {
+        type: 'interrupts',
+        data: [
+          {
+            value: {
+              title: '请确认或者修改以下PPT的相关信息，确认无误后点击提交',
+              type: 'edit_form',
+              payload: {
+                theme: 'DeepSeek',
+                target_audience: '导师和同学',
+                num_pages: 10,
+                user_role: '学生',
+                layout_style: 'top_bottom',
+              },
+            },
+            id: 'interrupt-1',
+          },
+        ],
       },
     })
   })

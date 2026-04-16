@@ -1,4 +1,4 @@
-export const API_BASE = '/api'
+export const API_BASE = 'http://localhost:8000/api'
 
 export type NormalizedApiError = {
   detail?: unknown
@@ -119,6 +119,21 @@ export async function createSessionId(
   return response.json()
 }
 
+export async function getLayoutStyles(
+  signal?: AbortSignal,
+): Promise<{ layout_styles: string[] }> {
+  const response = await fetch(`${API_BASE}/layout_styles`, {
+    method: 'GET',
+    signal,
+  })
+
+  if (!response.ok) {
+    throw new Error('获取布局风格失败')
+  }
+
+  return response.json()
+}
+
 type UploadContentFilesParams = {
   threadId: string
   files: File[]
@@ -127,7 +142,11 @@ type UploadContentFilesParams = {
 export async function uploadContentFiles({
   threadId,
   files,
-}: UploadContentFilesParams): Promise<unknown> {
+}: UploadContentFilesParams): Promise<{
+  file_dir: string
+  status: string
+  thread_id: string
+}> {
   const formData = new FormData()
   formData.append('thread_id', threadId)
 
@@ -155,7 +174,11 @@ type UploadTemplateFileParams = {
 export async function uploadTemplateFile({
   threadId,
   file,
-}: UploadTemplateFileParams): Promise<unknown> {
+}: UploadTemplateFileParams): Promise<{
+  status: string
+  template_file_path: string
+  thread_id: string
+}> {
   const formData = new FormData()
   formData.append('thread_id', threadId)
   formData.append('file', file)

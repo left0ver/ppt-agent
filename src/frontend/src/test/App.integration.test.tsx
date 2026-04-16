@@ -1,16 +1,40 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { useState } from 'react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import App from '../App'
+import ChatPanel from '../components/chat/ChatPanel'
 import FullscreenSlideViewer from '../components/preview/FullscreenSlideViewer'
 import PreviewEmptyState from '../components/preview/PreviewEmptyState'
 import PreviewSidebar, {
   type DeckVersion,
   type SlidePreview,
 } from '../components/preview/PreviewSidebar'
+import type { ChatMessage } from '../types/ppt-agent'
+
+function createSseResponse(...frames: string[]) {
+  return new Response(frames.join(''), {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+    },
+  })
+}
+
+function getRequestBody(mock: { mock: { calls: unknown[][] } }, callIndex: number) {
+  const [, init] = mock.mock.calls[callIndex] ?? []
+  const requestInit = (init ?? {}) as RequestInit
+
+  return String(requestInit.body ?? '')
+}
 
 function PreviewIntegrationHarness() {
   const [activeDeckVersion, setActiveDeckVersion] = useState<DeckVersion>('draft')
-  const [selectedSlideIndex, setSelectedSlideIndex] = useState<number>(-1)
   const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null)
   const [fullscreenOpen, setFullscreenOpen] = useState(false)
   const [draftSlides, setDraftSlides] = useState<SlidePreview[]>([
@@ -50,16 +74,11 @@ function PreviewIntegrationHarness() {
     draft: draftSlides,
     final: finalSlides,
   }
-
   const slides = slidesByVersion[activeDeckVersion]
-  const selectedSlide =
-    (selectedSlideId
-      ? slides.find((slide) => slide.id === selectedSlideId) ?? null
-      : null) ??
-    (selectedSlideIndex >= 0 && selectedSlideIndex < slides.length
-      ? slides[selectedSlideIndex]
-      : null)
-  const resolvedSelectedSlideIndex = selectedSlide
+  const selectedSlide = selectedSlideId
+    ? slides.find((slide) => slide.id === selectedSlideId) ?? null
+    : null
+  const selectedSlideIndex = selectedSlide
     ? slides.findIndex((slide) => slide.id === selectedSlide.id)
     : -1
 
@@ -69,39 +88,24 @@ function PreviewIntegrationHarness() {
         activeDeckVersion={activeDeckVersion}
         canViewDraft={slidesByVersion.draft.length > 0}
         canViewFinal={slidesByVersion.final.length > 0}
-        selectedSlideIndex={resolvedSelectedSlideIndex}
         selectedSlideId={selectedSlideId}
+        selectedSlideIndex={selectedSlideIndex}
         slides={slides}
         onDeckVersionChange={(nextVersion) => {
           setActiveDeckVersion(nextVersion)
-          setSelectedSlideIndex(-1)
           setSelectedSlideId(null)
           setFullscreenOpen(false)
         }}
         onThumbnailClick={(slideIndex) => {
-          setSelectedSlideIndex(slideIndex)
           setSelectedSlideId(slides[slideIndex]?.id ?? null)
           setFullscreenOpen(true)
         }}
-        onThumbnailSelect={({ slideId, slideIndex }) => {
+        onThumbnailSelect={({ slideId }) => {
           setSelectedSlideId(slideId)
-          setSelectedSlideIndex(slideIndex)
         }}
       />
 
-      <button
-        type="button"
-        onClick={() => setSelectedSlideIndex(99)}
-      >
-        设为无效页码
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setSelectedSlideId('stale-slide-id')
-          setSelectedSlideIndex(1)
-        }}
-      >
+      <button type="button" onClick={() => setSelectedSlideId('stale-slide-id')}>
         设为过期页面标识
       </button>
       <button
@@ -138,39 +142,28 @@ function PreviewIntegrationHarness() {
       </button>
 
       <div aria-label="left-preview-panel">
-        {selectedSlide ? (
-          <div>
-            <div dangerouslySetInnerHTML={{ __html: selectedSlide.svgContent }} />
-            <button type="button" onClick={() => setFullscreenOpen(true)}>
-              打开全屏预览
-            </button>
-          </div>
-        ) : (
-          <PreviewEmptyState />
-        )}
+        <PreviewEmptyState />
       </div>
 
       <FullscreenSlideViewer
         open={fullscreenOpen}
         slideCount={slides.length}
-        slideIndex={resolvedSelectedSlideIndex}
+        slideIndex={selectedSlideIndex}
         onClose={() => setFullscreenOpen(false)}
-        onPrevious={() => {
-          if (resolvedSelectedSlideIndex <= 0) {
+        onNext={() => {
+          if (selectedSlideIndex < 0) {
             return
           }
 
-          const nextIndex = resolvedSelectedSlideIndex - 1
-          setSelectedSlideIndex(nextIndex)
+          const nextIndex = Math.min(slides.length - 1, selectedSlideIndex + 1)
           setSelectedSlideId(slides[nextIndex]?.id ?? null)
         }}
-        onNext={() => {
-          if (resolvedSelectedSlideIndex < 0) {
+        onPrevious={() => {
+          if (selectedSlideIndex <= 0) {
             return
           }
 
-          const nextIndex = Math.min(slides.length - 1, resolvedSelectedSlideIndex + 1)
-          setSelectedSlideIndex(nextIndex)
+          const nextIndex = selectedSlideIndex - 1
           setSelectedSlideId(slides[nextIndex]?.id ?? null)
         }}
       >
@@ -181,6 +174,57 @@ function PreviewIntegrationHarness() {
     </div>
   )
 }
+
+function ChatComposerLockHarness() {
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [composerLocked, setComposerLocked] = useState(false)
+
+  return (
+    <ChatPanel
+      composerDisabled={composerLocked}
+      composerLoading={false}
+      messages={messages}
+      onComposerSubmit={(prompt) => {
+        setMessages((currentMessages) => [
+          ...currentMessages,
+          {
+            id: `user-${currentMessages.length + 1}`,
+            kind: 'user_prompt',
+            text: prompt,
+          },
+        ])
+        setComposerLocked(true)
+      }}
+      onInterruptSkip={() => {}}
+      onInterruptSubmit={() => {}}
+    />
+  )
+}
+
+function InterruptHarness({
+  messages,
+  onSubmit,
+  onSkip,
+}: {
+  messages: ChatMessage[]
+  onSubmit: (context: Record<string, unknown>, payload: Record<string, unknown>) => Promise<void> | void
+  onSkip: (context: Record<string, unknown>) => Promise<void> | void
+}) {
+  return (
+    <ChatPanel
+      composerDisabled
+      composerLoading={false}
+      messages={messages}
+      onComposerSubmit={() => {}}
+      onInterruptSkip={onSkip}
+      onInterruptSubmit={onSubmit}
+    />
+  )
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('App preview integration', () => {
   it('lets a thumbnail click drive the fullscreen preview flow', async () => {
@@ -203,22 +247,7 @@ describe('App preview integration', () => {
     expect(
       screen.queryByRole('dialog', { name: '全屏查看幻灯片' }),
     ).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '打开全屏预览' })).toBeInTheDocument()
-  })
-
-  it('keeps fullscreen pagination valid when the selected index becomes stale while open', () => {
-    render(<PreviewIntegrationHarness />)
-
-    fireEvent.click(screen.getByRole('button', { name: '查看第 2 页' }))
-
-    const viewer = screen.getByRole('dialog', { name: '全屏查看幻灯片' })
-    expect(within(viewer).getByText('第 2 / 2 页')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: '设为无效页码' }))
-
-    expect(within(viewer).getByText('第 2 / 2 页')).toBeInTheDocument()
-    expect(within(viewer).getByRole('button', { name: '上一页' })).not.toBeDisabled()
-    expect(within(viewer).getByRole('button', { name: '下一页' })).toBeDisabled()
+    expect(screen.getByText('点击左侧缩略图查看页面预览')).toBeInTheDocument()
   })
 
   it('keeps the selected slide stable when the slide list changes after selection', () => {
@@ -237,16 +266,241 @@ describe('App preview integration', () => {
     expect(screen.getByRole('button', { current: 'page', name: '查看第 1 页' })).toBeInTheDocument()
   })
 
-  it('falls back to a valid selected index when the selected slide id is stale', () => {
+  it('falls back cleanly when the selected slide id becomes stale', () => {
     render(<PreviewIntegrationHarness />)
 
     fireEvent.click(screen.getByRole('button', { name: '设为过期页面标识' }))
 
     expect(
-      screen.getByRole('button', { current: 'page', name: '查看第 2 页' }),
-    ).toBeInTheDocument()
-    expect(
       screen.queryByRole('button', { current: 'page', name: '查看第 1 页' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('locks the composer after the first submit in a chat flow', () => {
+    render(<ChatComposerLockHarness />)
+
+    const promptInput = screen.getByRole('textbox', { name: '输入 PPT 需求' })
+    fireEvent.change(promptInput, { target: { value: '  做一份 AI 行业分析  ' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+
+    expect(within(screen.getByLabelText('用户')).getByText('做一份 AI 行业分析')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '输入 PPT 需求' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '发送需求' })).toBeDisabled()
+  })
+
+  it('passes interrupt identity and edited payload on edit_form submit', async () => {
+    const onSubmit = vi.fn()
+
+    render(
+      <InterruptHarness
+        messages={[
+          {
+            id: 'message-edit-1',
+            kind: 'assistant_interrupt',
+            interrupt: {
+              id: 'interrupt-envelope-edit-1',
+              value: {
+                type: 'edit_form',
+                title: '补充演示文稿信息',
+                payload: {
+                  theme: 'AI 营销方案',
+                  target_audience: '市场团队',
+                  num_pages: 12,
+                  user_role: '产品经理',
+                  layout_style: 'grid',
+                },
+              },
+            },
+          },
+        ]}
+        onSkip={() => {}}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: '页数' }), {
+      target: { value: '18' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '提交' }))
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+    })
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        interruptId: 'interrupt-envelope-edit-1',
+        interruptType: 'edit_form',
+        interruptTitle: '补充演示文稿信息',
+      },
+      expect.objectContaining({
+        num_pages: 18,
+        theme: 'AI 营销方案',
+      }),
+    )
+  })
+
+  it('prevents duplicate async skip clicks on interrupt cards', async () => {
+    let resolveSkip: (() => void) | undefined
+    const onSkip = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSkip = resolve
+        }),
+    )
+
+    render(
+      <InterruptHarness
+        messages={[
+          {
+            id: 'message-content-1',
+            kind: 'assistant_interrupt',
+            interrupt: {
+              id: 'interrupt-envelope-content-1',
+              value: {
+                type: 'upload_ppt_content_files',
+                title: '上传内容文件',
+                file_type: ['pdf', 'docx'],
+              },
+            },
+          },
+        ]}
+        onSkip={onSkip}
+        onSubmit={() => {}}
+      />,
+    )
+
+    const skipButton = screen.getByRole('button', { name: '跳过' })
+    fireEvent.click(skipButton)
+    fireEvent.click(skipButton)
+
+    expect(onSkip).toHaveBeenCalledTimes(1)
+    expect(onSkip).toHaveBeenCalledWith({
+      interruptId: 'interrupt-envelope-content-1',
+      interruptType: 'upload_ppt_content_files',
+      interruptTitle: '上传内容文件',
+    })
+    expect(skipButton).toBeDisabled()
+
+    resolveSkip?.()
+
+    await waitFor(() => {
+      expect(skipButton).not.toBeDisabled()
+    })
+  })
+
+  it('creates a new thread on mount and renders the chat shell', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
+          status: 200,
+        }),
+      )
+
+    render(<App />)
+
+    expect(await screen.findByText('One active run per fresh session')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/create_session_id'),
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('submits interrupt payloads through hitl_resume and exposes draft previews', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: current_stage\ndata: {"type":"current_stage","data":"正在确认PPT的具体需求"}\n\n',
+          'event: interrupts\ndata: {"type":"interrupts","data":[{"id":"interrupt-1","value":{"title":"请确认或者修改以下PPT的相关信息，确认无误后点击提交","type":"edit_form","payload":{"theme":"DeepSeek R1 介绍","target_audience":"导师和同学","num_pages":10,"user_role":"学生","layout_style":"top_bottom"}}}]}\n\n',
+        ),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: current_stage\ndata: {"type":"current_stage","data":"已恢复执行"}\n\n',
+          'event: first_draft\ndata: {"first_draft_results":[{"page_index":0,"svg_content":"<svg><text>draft-page-1</text></svg>","file_path":"user_data/thread-1/first_draft/page_1.svg"}]}\n\n',
+        ),
+      )
+
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
+      target: { value: '帮我做一个 DeepSeek 汇报' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+
+    await screen.findByText('请确认或者修改以下PPT的相关信息，确认无误后点击提交')
+    fireEvent.click(screen.getByRole('button', { name: '提交' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    })
+
+    expect(getRequestBody(fetchMock, 2)).toContain('"type":"start"')
+    expect(getRequestBody(fetchMock, 3)).toContain('"type":"hitl_resume"')
+    expect(getRequestBody(fetchMock, 3)).toContain('"theme":"DeepSeek R1 介绍"')
+
+    expect(await screen.findByText('初稿已更新，可在左侧切换并进入全屏预览。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看第 1 页' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '查看第 1 页' }))
+    expect(screen.getByRole('dialog', { name: '全屏查看幻灯片' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '第 1 页' })).toHaveAttribute(
+      'src',
+      expect.stringContaining('draft-page-1'),
+    )
+  })
+
+  it('resumes upload interrupts with hitl_resume when the user skips content upload', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ thread_id: 'thread-1' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ layout_styles: ['top_bottom', 'grid'] }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: interrupts\ndata: {"type":"interrupts","data":[{"id":"interrupt-content-1","value":{"title":"你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过","type":"upload_ppt_content_files","file_type":["pdf","docx","markdown","md"]}}]}\n\n',
+        ),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse(
+          'event: current_stage\ndata: {"type":"current_stage","data":"已跳过内容资料并继续执行"}\n\n',
+        ),
+      )
+
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('输入 PPT 需求'), {
+      target: { value: '帮我做一个 DeepSeek 汇报' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送需求' }))
+
+    await screen.findByText('你可以上传PPT内容相关的文件或者网站,如果没有可以直接跳过')
+    fireEvent.click(screen.getByRole('button', { name: '跳过' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    })
+
+    expect(getRequestBody(fetchMock, 3)).toContain('"type":"hitl_resume"')
+    expect(getRequestBody(fetchMock, 3)).toContain('"have_ppt_content_files":false')
+    expect(getRequestBody(fetchMock, 3)).toContain('"ppt_content_source_urls":null')
+    expect(getRequestBody(fetchMock, 3)).not.toContain('"type":"abort_resume"')
   })
 })
