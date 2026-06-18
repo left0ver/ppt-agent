@@ -14,8 +14,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 *.svg
-*.ppt
-*.pptx
+# *.ppt
+# *.pptx
 *.pdf
 *.png
 *.jpg
