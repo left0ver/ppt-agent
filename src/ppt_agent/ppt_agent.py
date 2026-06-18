@@ -44,8 +44,8 @@ class PPTAgent:
         graph.add_node("parse_ppt_content_files", parse_ppt_content_files)
         graph.add_node("parse_ppt_content_urls", parse_ppt_content_urls)
         # 该节点延迟执行
-        graph.add_node("parse_ppt_template", parse_ppt_template, defer=True)
-        graph.add_node("generate_ppt_outline", generate_ppt_outline)
+        # graph.add_node("parse_ppt_template", parse_ppt_template, defer=True)
+        graph.add_node("generate_ppt_outline", generate_ppt_outline, defer=True)
         graph.add_node(
             "generate_ppt_content_per_page",
             generate_ppt_content_per_page,
@@ -84,9 +84,11 @@ class PPTAgent:
         )
         graph.add_edge("parse_ppt_content_files", "parse_ppt_content_urls")
 
-        graph.add_edge("search_ppt_contents", "parse_ppt_template")
-        graph.add_edge("parse_ppt_content_urls", "parse_ppt_template")
-        graph.add_edge("parse_ppt_template", "generate_ppt_outline")
+        # graph.add_edge("search_ppt_contents", "parse_ppt_template")
+        # graph.add_edge("parse_ppt_content_urls", "parse_ppt_template")
+        # graph.add_edge("parse_ppt_template", "generate_ppt_outline")
+        graph.add_edge("search_ppt_contents", "generate_ppt_outline")
+        graph.add_edge("parse_ppt_content_urls", "generate_ppt_outline")
         graph.add_edge("generate_ppt_outline", "generate_ppt_content_per_page")
         graph.add_conditional_edges(
             "generate_ppt_content_per_page",

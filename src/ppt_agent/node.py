@@ -88,24 +88,24 @@ def ask_for_ppt_info(
         ppt_content_source_from_user["have_ppt_content_files"],
         ppt_content_source_from_user.get("ppt_content_source_urls", None),
     )
-
-    ppt_template_info = interrupt(
-        UploadPPTTemplateInterruptValues(
-            title="你可以上传一个PPT模板文件，如果没有可以直接跳过",
-        )
-    )
+    # TODO: 实现ppt模板的功能
+    # ppt_template_info = interrupt(
+    #     UploadPPTTemplateInterruptValues(
+    #         title="你可以上传一个PPT模板文件，如果没有可以直接跳过",
+    #     )
+    # )
     # 如果 have_ppt_template=False, ppt_template_path则为None
-    have_ppt_template, ppt_template_path = (
-        ppt_template_info["have_ppt_template"],
-        ppt_template_info["ppt_template_path"],
-    )
+    # have_ppt_template, ppt_template_path = (
+    #     ppt_template_info["have_ppt_template"],
+    #     ppt_template_info["ppt_template_path"],
+    # )
 
     return {
         "ppt_info": ppt_info,
         "have_ppt_content_files": have_ppt_content_files,
-        "have_ppt_template": have_ppt_template,
+        # "have_ppt_template": have_ppt_template,
         "ppt_content_source_urls": ppt_content_source_urls,
-        "ppt_template_path": ppt_template_path if have_ppt_template else None,
+        # "ppt_template_path": ppt_template_path if have_ppt_template else None,
     }
 
 
@@ -254,7 +254,7 @@ def parse_ppt_template(
     将用户上传的ppt、pptx模板转为svg的格式，用来后面LLM根据这个模板的svg来生成对应的ppt
     """
     writer = get_stream_writer()
-    writer({"current_stage": "正在解析用户上传的PPT模板"})
+    # writer({"current_stage": "正在解析用户上传的PPT模板"})
     # TODO: 可能得加一些pptx的页数的限制，页数太多会导致上下文太长
     thread_id = config["configurable"].get("thread_id")
     if not state.have_ppt_template:
