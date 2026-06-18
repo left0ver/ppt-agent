@@ -72,7 +72,9 @@ async def generate_first_draft_task(
         | RunnableLambda(verify_svg)
     )
 
-    ppt_page_content = await chain.ainvoke({"page_content": page_content})
+    ppt_page_content = await chain.with_retry(stop_after_attempt=3).ainvoke(
+        {"page_content": page_content}
+    )
     svg_file_path = Path(
         f"{USER_DATA_ROOT_DIR}/{thread_id}/first_draft/page_{page_index + 1}.svg"
     )
@@ -131,7 +133,7 @@ async def generate_final_ppt_task(
     final_ppt_path = Path(
         f"{USER_DATA_ROOT_DIR}/{thread_id}/final_ppt/page_{page_index + 1}.svg"
     )
-    final_ppt_svg_content = await chain.ainvoke(
+    final_ppt_svg_content = await chain.with_retry(stop_after_attempt=3).ainvoke(
         {"first_draft_svg_code": first_draft_svg_code, "user_ppt_style": user_ppt_style}
     )
     final_ppt_path.parent.mkdir(parents=True, exist_ok=True)

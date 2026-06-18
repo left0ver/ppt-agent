@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import AsyncIterator, Literal
 
+import aiosqlite
+from aiosqlitepool import SQLiteConnectionPool
 from fastapi.sse import ServerSentEvent
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
@@ -20,6 +22,12 @@ from src.ppt_agent.temp import (
     web_fetch_results,
 )
 from src.ppt_agent.types import PPTInfo
+from src.ppt_agent.utils import get_config, is_development
+
+
+async def connection_factory():
+    config = get_config()
+    return await aiosqlite.connect(config["checkpoint_path"])
 
 
 @dataclass
@@ -123,7 +131,11 @@ async def resume_ppt_agent(
 
 
 async def test_pipeline():
-    agent = await PPTAgent.create()
+    if is_development():
+        agent = await PPTAgent.create(pool=None)
+    else:
+        pool = SQLiteConnectionPool(connection_factory)
+        agent = await PPTAgent.create(pool)
     thread_id = "zwc_test222"
     async for chunk in start_ppt_agent(
         agent,
@@ -166,7 +178,11 @@ async def test_pipeline():
 
 
 async def test_partial_node():
-    agent = await PPTAgent.create()
+    if is_development():
+        agent = await PPTAgent.create(pool=None)
+    else:
+        pool = SQLiteConnectionPool(connection_factory)
+        agent = await PPTAgent.create(pool)
     thread_id = "zwc_test555"
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     origin_state = State(

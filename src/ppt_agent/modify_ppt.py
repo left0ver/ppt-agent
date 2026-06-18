@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated, Literal, TypedDict
 
 from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
 from langchain.messages import ToolMessage
 from langchain.tools import tool
 from langchain_core.messages import AnyMessage
@@ -19,6 +20,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.types import Command
 from src.ppt_agent.prompt import modify_ppt_prompt_template
 from src.ppt_agent.utils import verify_svg
+from src.ppt_agent.config import get_config
 
 load_dotenv()
 
@@ -49,11 +51,8 @@ def modify_ppt(
     :param ppt_page: 用户需要修改的PPT页码,eg.1,2,3
     :param user_instruction: 用户的修改指令，描述需要对该页PPT进行哪些修改
     """
-    llm = ChatOpenAI(
-        model=os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
+    config = get_config()
+    llm = init_chat_model(**config["generate_model_config"])
     chain = (
         modify_ppt_prompt_template
         | llm
@@ -101,6 +100,7 @@ class State(TypedDict):
     user_instruction: str
     is_modify_ppt_intent: bool
     messages: Annotated[list[AnyMessage], add_messages]
+
 
 class OutputSchema(TypedDict):
     response_content: str

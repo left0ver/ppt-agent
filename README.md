@@ -16,7 +16,6 @@ ppt-agent/
 │   ├── frontend/          # React 前端
 │   └── ppt_agent/         # LangGraph Agent 与核心逻辑
 ├── user_data/             # 会话数据、上传文件、生成结果
-├── docs/                  # 项目文档
 ├── pyproject.toml         # Python 依赖
 ├── uv.lock                
 └── README.md
@@ -32,6 +31,7 @@ ppt-agent/
 3. 自动根据PPT的主题等信息搜索PPT的内容资料
 4. 同时支持用户上传PPT的内容资料来作为PPT的内容来源
 5. 暂停/继续: 在PPT生成过程中，用户可以选择暂停生成，此时Agent会停止当前的生成任务，等待用户继续。当用户选择继续时，Agent会从上次暂停的地方继续生成PPT。
+6. 专门内置了一个用于ppt修改的agent，可以在生成ppt之后对ppt进行修改
 
 
 # Agent特色
@@ -46,8 +46,8 @@ ppt-agent/
 <img src="./ppt_generation_agent_graph.png" align="center" />
 
 # 效果预览
-TOOD:
-
+![效果展示](./效果展示.png)
+生成的ppt在`generated_ppt`目录下
 # 快速开始
 
 ## 依赖安装
@@ -56,7 +56,7 @@ TOOD:
 ```shell
 uv sync 
 ```
-1. 安装前端依赖
+2. 安装前端依赖
 
 ```shell
 cd src/frontend
@@ -88,14 +88,15 @@ pnpm --dir src/frontend/ dev --port 5173
 - 如需修改，请编辑 `src/frontend/src/lib/ppt-agent-api.ts` 中的 `API_BASE`。
 
 # TODO_List
-- [] URL的检验
-- [] speaker_note的生成
+[ ] URL的检验
+[ ] speaker_note的生成
+[ ] 封面页等考虑采用一种统一的布局方式，例如居中并且采用从上到下，从左到右的布局方式
+[ ] 支持docker部署
 ## 参考与致谢
 
 - [应该是目前最强的PPT Agent，附上完整思路分享](https://linux.do/t/topic/1782304)
 - [【使用外部知识降低模型幻觉】让专业的grok干专业的search，让专业的tavily干专业的crawl](https://linux.do/t/topic/1606525)
-- [GrokSearch](https://github.com/GuDaStudio/GrokSearch)
-- [grok无限用](https://linux.do/t/topic/1697476)
+- [ppt-master](https://github.com/hugohe3/ppt-master)
 
 ## License
 
