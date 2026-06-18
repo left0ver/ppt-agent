@@ -31,3 +31,5 @@ dependencies = [
     "orjson>=3.11.7",
     "aiosqlitepool>=1.0.0",
 ]
+[tool.vercel]
+entrypoint = "src.backend.main:app"
