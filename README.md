@@ -78,7 +78,7 @@ python -m uvicorn src.backend.main:app --port 8000 --host 0.0.0.0
 ```  
 
 ### 启动前端
-cp src/frontend/.env.example src/frontend/.env,并编辑环境变量设置接口的base_url
+`cp src/frontend/.env.example  src/frontend/.env`,并编辑环境变量设置接口的`base_url`
 
 ```bash
 pnpm --dir src/frontend/ dev --host --port 5173
