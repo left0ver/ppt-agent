@@ -74,13 +74,13 @@ pnpm install
 2. 启动后端
 
 ```bash
-python -m uvicorn src.backend.main:app --port 8000
+python -m uvicorn src.backend.main:app --port 8010 --host 0.0.0.0
 ```  
 
 ### 启动前端
 
 ```bash
-pnpm --dir src/frontend/ dev --port 5173
+pnpm --dir src/frontend/ dev --host --port 5173
 
 ```
 注意：
