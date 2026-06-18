@@ -23,6 +23,7 @@ ppt-agent/
 
 前端采用React + Ant Design X来构建用户界面,支持导出PPT，PPT的预览等功能；后端采用FastAPI来构建后端接口；Agent采用了`Langgraph`构建
 
+> 前端代码采用的是vibecoding的方式进行开发，后端和agent代码都是自己写的
 
 # 整体功能
 
