@@ -74,19 +74,16 @@ pnpm install
 2. 启动后端
 
 ```bash
-python -m uvicorn src.backend.main:app --port 8010 --host 0.0.0.0
+python -m uvicorn src.backend.main:app --port 8000 --host 0.0.0.0
 ```  
 
 ### 启动前端
+cp src/frontend/.env.example src/frontend/.env,并编辑环境变量设置接口的base_url
 
 ```bash
 pnpm --dir src/frontend/ dev --host --port 5173
 
 ```
-注意：
-
-- 当前前端 API 地址写死为 `http://localhost:8000/api`。
-- 如需修改，请编辑 `src/frontend/src/lib/ppt-agent-api.ts` 中的 `API_BASE`。
 
 # TODO_List
 - [ ] URL的检验
