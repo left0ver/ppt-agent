@@ -89,10 +89,10 @@ pnpm --dir src/frontend/ dev --port 5173
 - 如需修改，请编辑 `src/frontend/src/lib/ppt-agent-api.ts` 中的 `API_BASE`。
 
 # TODO_List
-[ ] URL的检验
-[ ] speaker_note的生成
-[ ] 封面页等考虑采用一种统一的布局方式，例如居中并且采用从上到下，从左到右的布局方式
-[ ] 支持docker部署
+- [ ] URL的检验
+- [ ] speaker_note的生成
+- [ ] 封面页等考虑采用一种统一的布局方式，例如居中并且采用从上到下，从左到右的布局方式
+- [ ] 支持docker部署
 ## 参考与致谢
 
 - [应该是目前最强的PPT Agent，附上完整思路分享](https://linux.do/t/topic/1782304)
