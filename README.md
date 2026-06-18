@@ -85,7 +85,7 @@ pnpm --dir src/frontend/ dev --host --port 5173
 
 ```
 
-# TODO_List
+# Todo_List
 - [ ] URL的检验
 - [ ] speaker_note的生成
 - [ ] 封面页等考虑采用一种统一的布局方式，例如居中并且采用从上到下，从左到右的布局方式
