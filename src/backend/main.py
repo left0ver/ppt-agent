@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 
 import aiosqlite
 from aiosqlitepool import SQLiteConnectionPool
-from fastapi import Body, FastAPI, File, Form, HTTPException, Path, Query, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import ServerSentEvent
 from pydantic import BaseModel, Field
