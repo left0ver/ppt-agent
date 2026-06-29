@@ -73,7 +73,7 @@ export default function Composer({
           aria-label="输入 PPT 需求"
           disabled={inputDisabled}
           className="chat-composer__input"
-          placeholder="我是学生，我需要向导师介绍deepseekR1的论文，PPT页数大概为10页，布局风格采用网格布局方式"
+          placeholder="一句话输入你的PPT需求，例如我是学生，我需要向导师介绍deepseekR1的论文，PPT页数大概为10页，布局风格采用网格布局方式"
           rows={3}
           variant="borderless"
           value={value}
